@@ -1,16 +1,12 @@
 "use client";
 
 import "@/lib/map-worker";
+import { resolveMapStyle } from "@/lib/map-style";
 import { LngLatBounds, Map as MapLibre, Marker, type GeoJSONSource } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useTheme } from "next-themes";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-
-const STYLES = {
-  light: "https://tiles.openfreemap.org/styles/liberty",
-  dark: "https://tiles.openfreemap.org/styles/dark",
-};
 
 export type MapMarker = {
   id: string;
@@ -62,6 +58,7 @@ export function TripMap({
   const cameraRef = useRef<{ center: [number, number]; zoom: number } | null>(null);
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  const [mapEpoch, setMapEpoch] = useState(0);
   const theme = resolvedTheme === "dark" ? "dark" : "light";
 
   clickRef.current = onMarkerClick;
@@ -70,36 +67,44 @@ export function TripMap({
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+    let cancelled = false;
+    let map: MapLibre | undefined;
+    let timer = 0;
+    let observer: ResizeObserver | undefined;
     setFailed(false);
     const initial = cameraRef.current;
-    let map: MapLibre;
-    try {
-      map = new MapLibre({
-        container,
-        style: STYLES[theme],
-        center: initial?.center ?? [markers[0]?.lng ?? 0, markers[0]?.lat ?? 20],
-        zoom: initial?.zoom ?? (markers.length ? 11 : 1.4),
-        interactive,
+    resolveMapStyle(theme)
+      .then((style) => {
+        if (cancelled) return;
+        map = new MapLibre({
+          container,
+          style,
+          center: initial?.center ?? [markers[0]?.lng ?? 0, markers[0]?.lat ?? 20],
+          zoom: initial?.zoom ?? (markers.length ? 11 : 1.4),
+          interactive,
+        });
+        mapRef.current = map;
+        timer = window.setTimeout(() => setFailed(true), 12000);
+        map.on("load", () => window.clearTimeout(timer));
+        map.on("moveend", () => {
+          if (!map) return;
+          const center = map.getCenter();
+          cameraRef.current = { center: [center.lng, center.lat], zoom: map.getZoom() };
+        });
+        observer = new ResizeObserver(() => map?.resize());
+        observer.observe(container);
+        setMapEpoch((value) => value + 1);
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true);
       });
-    } catch {
-      setFailed(true);
-      return;
-    }
-    mapRef.current = map;
-    const timer = window.setTimeout(() => setFailed(true), 12000);
-    map.on("load", () => window.clearTimeout(timer));
-    map.on("moveend", () => {
-      const center = map.getCenter();
-      cameraRef.current = { center: [center.lng, center.lat], zoom: map.getZoom() };
-    });
-    const observer = new ResizeObserver(() => map.resize());
-    observer.observe(container);
     return () => {
+      cancelled = true;
       window.clearTimeout(timer);
-      observer.disconnect();
+      observer?.disconnect();
       markersRef.current.forEach((marker) => marker.remove());
       markersRef.current.clear();
-      map.remove();
+      map?.remove();
       mapRef.current = null;
     };
   }, [theme, attempt, interactive]);
@@ -153,7 +158,7 @@ export function TripMap({
       };
       frame = requestAnimationFrame(step);
     }
-  }, [routes, attempt, theme]);
+  }, [routes, attempt, theme, mapEpoch]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -196,7 +201,7 @@ export function TripMap({
     };
     if (map.isStyleLoaded()) sync();
     else map.once("load", sync);
-  }, [markers, highlightId, attempt, theme]);
+  }, [markers, highlightId, attempt, theme, mapEpoch]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -210,14 +215,14 @@ export function TripMap({
     };
     if (map.isStyleLoaded()) fit();
     else map.once("load", fit);
-  }, [fitKey, attempt, theme]);
+  }, [fitKey, attempt, theme, mapEpoch]);
 
   useEffect(() => {
     const map = mapRef.current;
     const marker = markers.find((item) => item.placeId === focusId || item.id === focusId);
     if (!map || !marker) return;
     map.flyTo({ center: [marker.lng, marker.lat], zoom: Math.max(map.getZoom(), 13.4), speed: 0.55, curve: 1.2, essential: true });
-  }, [focusId]);
+  }, [focusId, mapEpoch]);
 
   return (
     <div className={className ?? "relative h-full w-full"}>

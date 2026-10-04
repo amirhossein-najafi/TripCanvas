@@ -90,6 +90,8 @@ button, input, textarea, select { font: inherit; color: inherit; }
   box-shadow: var(--shadow);
 }
 
+.maplibregl-map { background: #e7e2d8; }
+.dark .maplibregl-map { background: #3f3832; }
 .maplibregl-ctrl-attrib { font-size: 10px !important; background: transparent !important; }
 .maplibregl-ctrl-attrib a { color: var(--muted) !important; }
 

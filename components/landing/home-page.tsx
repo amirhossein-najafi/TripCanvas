@@ -79,7 +79,7 @@ export function HomePage() {
         <div className="absolute inset-0">
           <LandingMap center={center} zoom={picked?.zoom ?? 1.7} />
         </div>
-        <div className="absolute inset-0 bg-gradient-to-r from-background via-background/85 to-background/20" />
+        <div className="absolute inset-0 bg-gradient-to-r from-background via-background/75 to-transparent" />
         <div className="relative z-10 grid min-h-dvh items-center gap-10 px-6 py-24 lg:grid-cols-[1.1fr_0.9fr] lg:px-16">
           <div>
             <h1 className="max-w-xl font-serif text-6xl leading-[0.95] font-semibold md:text-7xl">Plan less.<br />Experience more.</h1>
