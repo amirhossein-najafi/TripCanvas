@@ -2,58 +2,62 @@
 
 **Plan less. Experience more.**
 
-پلنر سفر تعاملی: برنامه روزبه‌روز، نقشه، بودجه، رزرو، و همکاری روی یک سفر. به‌جای داشبورد مالی، یک بوم سفر است؛ نقشه و کارت‌ها کنار هم حرکت می‌کنند.
+An interactive trip planner: a day-by-day plan, a map, a budget, bookings, and collaboration on one trip. The map and the cards move together.
 
-## شروع سریع
+## Quick start
 
 ```bash
 npm install
 npm run dev
 ```
 
-اپ روی [http://localhost:3000](http://localhost:3000) بالا می‌آید. بدون هیچ کلیدی کار می‌کند: داده در همین مرورگر، داخل `localStorage`، ذخیره می‌شود.
+The app runs at [http://localhost:3000](http://localhost:3000). It needs no API keys. Data stays in this browser, in `localStorage`.
 
-از صفحه ورود، **Continue as Ali**، **Sara**، یا **Reza** را بزنید. رمز هر سه `demo` است.
+On the sign-in screen, choose **Continue as Ali**, **Sara**, or **Reza**. The password for all three is `demo`.
 
 | | |
 | --- | --- |
-| Ali | `ali@tripcanvas.app` · صاحب سفر نمونه |
-| Sara | `sara@tripcanvas.app` · ویرایشگر |
-| Reza | `reza@tripcanvas.app` · بیننده |
+| Ali | `ali@tripcanvas.app` · owner of the sample trip |
+| Sara | `sara@tripcanvas.app` · editor |
+| Reza | `reza@tripcanvas.app` · viewer |
 
-سفر نمونه توکیو، ۱۲ تا ۱۷ مارس ۲۰۲۷، عمومی است: [`/p/tokyo-2027`](http://localhost:3000/p/tokyo-2027).
+The sample Tokyo trip, March 12–17 2027, is public: [`/p/tokyo-2027`](http://localhost:3000/p/tokyo-2027).
 
-## یک سفر چطور ساخته می‌شود
+## Make a trip
 
-1. در هیرو بنویسید کجا می‌خواهید بروید. شهرها از آسیا، اروپا، آفریقا، آمریکای شمالی و جنوبی، و اقیانوسیه هستند: از توکیو و سئول تا مراکش، کیپ‌تاون، ریو، مکزیکوسیتی، سیدنی و ریکیاویک.
-2. نقشه آرام روی مقصد زوم می‌کند. تاریخ و تعداد مسافر را بگذارید و **Create a trip** را بزنید.
-3. **+ Add place** جاهای پیشنهادی را نشان می‌دهد. هاور روی لیست، مارکر را بزرگ می‌کند و برعکس.
-4. جزئیات مکان روی دسکتاپ کشوی راست است و روی موبایل همان کامپوننت، bottom sheet.
-5. کارت را بین روزها بکشید. مسیر همان روز دوباره کشیده می‌شود و اگر جابه‌جایی شکست بخورد، برمی‌گردد با پیام `Couldn't move activity.`
+1. In the hero, type where you want to go. Cities span Asia, Europe, Africa, the Americas, and Oceania: Tokyo and Seoul, Marrakech, Cape Town, Rio, Mexico City, Sydney, Reykjavík, and others.
+2. The map eases in on the destination. Set the dates and the number of travelers, then choose **Create a trip**.
+3. **+ Add place** lists suggested places. Hovering a row enlarges its marker, and hovering a marker highlights the row.
+4. Place details open as a drawer on the right on desktop, and as a bottom sheet on mobile.
+5. Drag a card from one day to another. That day's route redraws. If the move fails, it rolls back with `Couldn't move activity.`
 
-## داخل اپ
+Only the trip owner can delete it: open **•••**, then **Settings**, then **Delete trip**.
 
-- **Itinerary.** نوار روزها، تایم‌لاین، درگ بین روزها، تقویم ماه، و برد با ستون Ideas.
-- **Map.** مارکر شماره‌دار، رنگ مسیر جدا برای هر روز، و دوربینی که با اسکرول تایم‌لاین می‌آید. حالت روشن و تیره هر دو روی خود نقشه هم عوض می‌شوند.
-- **Budget.** کل، خرج‌شده، باقی‌مانده. Hotel، Food، Transport، Activities، Shopping. مبلغ برنامه‌ریزی‌شده در برابر واقعی، و تسویه به شکل `Sara owes Ali $54`.
-- **Bookings.** پرواز، هتل، بلیت، یادداشت، و **Show ticket** با QR تمام‌صفحه.
-- **Collaborate.** دعوت با `/t/[slug]`، نقش‌های Owner / Editor / Viewer، آواتار حضور، و کامنت روی فعالیت. سفر عمومی از `/p/[slug]` با **Duplicate this trip**.
-- **Polish.** `Ctrl` یا `Cmd` + `K` برای ساخت سفر، افزودن مکان، باز کردن سفر، رفتن به رزروها، و dark mode. اسکلتون به‌جای اسپینر. اگر نقشه نیاید: `We couldn't load the map.` و `Your itinerary is safe.`
+## Inside the app
 
-## لایه Wow
+- **Itinerary.** Day chips, a timeline, drag across days, a month calendar, and a board with an Ideas column.
+- **Map.** Numbered markers, a route color per day, and a camera that follows the timeline as you scroll. Light and dark mode change the map too.
+- **Budget.** Total, spent, and remaining. Hotel, Food, Transport, Activities, Shopping. Planned against actual, and balances such as `Sara owes Ali $54`.
+- **Bookings.** Flights, hotels, tickets, notes, and **Show ticket** with a full-screen QR code.
+- **Collaborate.** Invite people with `/t/[slug]`. Roles are Owner, Editor, and Viewer. Presence avatars and comments sit on activities. A public trip lives at `/p/[slug]` with **Duplicate this trip**.
+- **Polish.** `Ctrl` or `Cmd` + `K` creates a trip, adds a place, opens a trip, jumps to bookings, and toggles dark mode. Loading states are skeletons. If the map fails: `We couldn't load the map.` and `Your itinerary is safe.`
 
-- **Optimize route.** اگر مسیر روز قابل کوتاه شدن باشد: `Your route can be N minutes shorter.` ترتیب با نزدیک‌ترین همسایه، از اولین نقطه، عوض می‌شود و خط نقشه همزمان دوباره رسم می‌شود.
-- **Travel Mode.** نمای موبایل روز سفر: سلام، کارت Next با فاصله دقیقه‌ای و Start navigation، و بعد از آن. اگر تاریخ سفر امروز نباشد، از خود سفر قابل پیش‌نمایش است.
-- **Story Mode.** **Present trip** تمام‌صفحه، توقف به توقف، با زوم سینمایی نقشه.
-- **Plan my day.** روی مکان‌های ذخیره‌شده، نه یک چت‌بات. مثلاً coffee، art، ramen، سقف پیاده‌روی، یا `Make this day less busy`.
-- اگر روز جا داشته باشد و مکان ذخیره‌شده از نظر فاصله و مدت جا شود: `Mori Art Museum fits here.`
-- باران و فعالیت بیرونی: هشدار `Outdoor activity` و عمل `Move indoor activities here`.
+## The extra layer
 
-## حالت‌ها
+- **Optimize route.** When a day can be shorter: `Your route can be N minutes shorter.` Nearest-neighbour reorders the stops from the first point, and the map line redraws with the cards.
+- **Travel Mode.** A mobile view of the travel day: a greeting, a Next card with minutes away and Start navigation, then what comes after. If the trip is not today, you can still preview it.
+- **Story Mode.** **Present trip** goes full screen, stop by stop, with a cinematic zoom on the map.
+- **Plan my day.** It plans from saved places, not a chatbot. Try coffee, art, ramen, a walking cap, or `Make this day less busy`.
+- If a day has a gap and a saved place fits the distance and the duration: `Mori Art Museum fits here.`
+- Rain plus an outdoor stop shows `Outdoor activity` and **Move indoor activities here**.
 
-**محلی، پیش‌فرض.** متغیرهای Supabase را خالی بگذارید. سه کاربر دمو، سفر توکیو، و هر چه بسازید در همین دستگاه می‌ماند. بیننده‌ها نمی‌توانند چیزی را عوض کنند.
+Tokyo is the only trip that arrives already filled in. Every other city can be created from the homepage, then filled from its own place list.
 
-**Supabase.** فایل `.env.example` را به `.env.local` کپی کنید:
+## Modes
+
+**Local, the default.** Leave the Supabase variables empty. The three demo people, the Tokyo trip, and anything you create stay on this device. Viewers cannot change anything.
+
+**Supabase.** Copy `.env.example` to `.env.local`:
 
 ```bash
 NEXT_PUBLIC_SUPABASE_URL=
@@ -61,29 +65,29 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
 ```
 
-کلید service role فقط برای seed است و نباید به کلاینت برسد. اسکیما، RLS، باکت فایل رزروها، و Realtime در `supabase/migrations/0001_init.sql` است. آن را با `supabase db push` یا SQL Editor اعمال کنید. بعد از آن، Auth، Postgres، Storage، و حضور همزمان از همان رابط استفاده می‌کنند.
+The service role key is for seeding only and must not reach the client. Schema, RLS, the booking-files bucket, and Realtime are in `supabase/migrations/0001_init.sql`. Apply it with `supabase db push` or the SQL Editor. Auth, Postgres, Storage, and live presence then use the same interface.
 
-## اسکریپت‌ها
+## Scripts
 
-| دستور | کار |
+| Command | What it does |
 | --- | --- |
-| `npm run dev` | توسعه |
-| `npm run build` سپس `npm start` | ساخت و اجرای پروداکشن |
-| `npm test` | Vitest: مسیر، تسویه، جای خالی |
-| `npm run test:e2e` | Playwright: ساخت سفر توکیو، افزودن Shibuya، درگ به روز بعد، دیدن مارکر |
+| `npm run dev` | Start the dev server |
+| `npm run build` then `npm start` | Production build and server |
+| `npm test` | Vitest for routing, balances, and free-time fit |
+| `npm run test:e2e` | Playwright: create a Tokyo trip, add Shibuya, drag it to the next day, see the marker |
 
-## استک
+## Stack
 
-Next.js (App Router) و TypeScript، Tailwind، Radix، Motion، dnd-kit، MapLibre GL با استایل OpenFreeMap، TanStack Query، Zustand، Supabase، Zod، React Hook Form، Vitest، Playwright.
+Next.js App Router and TypeScript, Tailwind, Radix, Motion, dnd-kit, MapLibre GL with OpenFreeMap styles, TanStack Query, Zustand, Supabase, Zod, React Hook Form, Vitest, and Playwright.
 
-نقشه کلید نمی‌خواهد. آب‌وهوا از Open-Meteo است و اگر تاریخ سفر بیرون پنجره پیش‌بینی باشد، آب‌وهوای فصلی همان مقصد نشان داده می‌شود. مکان‌ها کاتالوگ خود پروژه‌اند، نه یک Places API پولی.
+The map needs no key. Weather comes from Open-Meteo. If the trip dates fall outside the forecast window, the app shows seasonal weather for that destination. Places come from the catalog in this repo, not a paid Places API.
 
-## میانبرها
+## Shortcuts
 
-| کلید | کار |
+| Key | Action |
 | --- | --- |
-| `Ctrl` / `Cmd` + `K` | پالت فرمان و جستجو |
-| `Esc` | بستن جزئیات مکان |
-| `←` `→` | روز قبل و بعد |
+| `Ctrl` / `Cmd` + `K` | Command palette and search |
+| `Esc` | Close place details |
+| `←` `→` | Previous and next day |
 
-آدرس روز، مکان، و نما را نگه می‌دارد: `?day=&place=&view=`. نماها `timeline`، `calendar`، و `board` هستند.
+The URL keeps the day, place, and view: `?day=&place=&view=`. Views are `timeline`, `calendar`, and `board`.
