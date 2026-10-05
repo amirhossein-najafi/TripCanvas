@@ -1,14 +1,19 @@
 import { expect, test, type Page } from "@playwright/test";
 
 async function addPlace(page: Page, query: string, id: string) {
-  await page.keyboard.press("Escape");
   const search = page.getByTestId("place-search");
-  if (!(await search.isVisible())) await page.getByTestId("add-place").click();
-  await search.fill("");
+  if (await search.isVisible()) {
+    await page.getByTestId("add-place").click();
+    await expect(search).toBeHidden();
+  }
+  await page.getByTestId("add-place").click();
   await search.fill(query);
-  await page.getByTestId(`place-${id}`).click();
+  const option = page.getByTestId(`place-${id}`);
+  await expect(option).toBeVisible();
+  await option.click();
   await page.getByTestId("add-to-itinerary").click();
   await expect(page.getByTestId(`activity-${id}`)).toBeVisible();
+  await expect(page.getByTestId("add-to-itinerary")).toBeHidden();
 }
 
 test("create a Tokyo trip, add Shibuya, and drag it to the next day", async ({ page }) => {

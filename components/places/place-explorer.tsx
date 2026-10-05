@@ -26,13 +26,13 @@ export function PlaceExplorer({
   if (!open) return null;
 
   const filtered = places
-    .filter((place) => `${place.name} ${place.category}`.toLowerCase().includes(text.trim().toLowerCase()))
+    .filter((place) => `${place.name} ${place.category} ${place.id}`.toLowerCase().includes(text.trim().toLowerCase()))
     .map((place) => ({ place, distance: haversine(place, { lat: trip.centerLat, lng: trip.centerLng }) }))
     .sort((a, b) => a.distance - b.distance);
 
   return (
     <aside className="absolute top-16 left-4 z-20 flex max-h-[min(640px,calc(100%-5rem))] w-[min(340px,calc(100%-2rem))] flex-col overflow-hidden rounded-[18px] border border-border bg-card shadow-[var(--shadow)]">
-      <div className="border-b border-border p-3">
+      <div className="shrink-0 border-b border-border p-3">
         <input
           data-testid="place-search"
           autoFocus
@@ -42,7 +42,7 @@ export function PlaceExplorer({
           className="h-11 w-full rounded-2xl bg-background px-3 outline-none"
         />
       </div>
-      <div className="overflow-auto p-2">
+      <div className="min-h-0 flex-1 overflow-auto p-2">
         <p className="px-2 py-2 text-xs tracking-[0.14em] text-muted uppercase">Suggested</p>
         {!places.length && (
           <div className="space-y-2 p-2">

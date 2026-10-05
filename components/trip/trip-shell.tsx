@@ -264,8 +264,15 @@ function TripTabs() {
 function PlacePortal() {
   const { bundle, canEdit, actions } = useTrip();
   const { placeId, day, patch } = useTripParams();
+  const [dismissed, setDismissed] = useState<string | null>(null);
+  const [seenPlaceId, setSeenPlaceId] = useState(placeId);
+  if (placeId !== seenPlaceId) {
+    setSeenPlaceId(placeId);
+    setDismissed(null);
+  }
   if (!bundle) return null;
-  const place = placeById(placeId) ?? bundle.places.find((item) => item.id === placeId) ?? null;
+  const shownId = placeId && placeId !== dismissed ? placeId : null;
+  const place = placeById(shownId) ?? bundle.places.find((item) => item.id === shownId) ?? null;
   const selected = bundle.days[day - 1] ?? bundle.days[0];
   const saved = bundle.saved.some((item) => item.placeId === place?.id);
   return (
@@ -275,11 +282,12 @@ function PlacePortal() {
       timeZone={bundle.trip.timezone}
       saved={saved}
       canEdit={canEdit}
-      onClose={() => patch({ place: null })}
+      onClose={() => { setDismissed(placeId); patch({ place: null }); }}
       onAdd={() => {
         if (!place || !selected) return;
         const added = place;
         const target = selected;
+        setDismissed(placeId);
         patch({ place: null });
         actions.createActivity({ dayId: target.id, placeId: added.id, title: added.name, startTime: "10:00", duration: added.durationMin }).then(() => toast(`Added to ${formatRange(target.date, target.date)}`)).catch(() => undefined);
       }}

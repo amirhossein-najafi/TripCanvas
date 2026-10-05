@@ -153,7 +153,7 @@ export function MapStage() {
       >
         <Plus size={16} /> Add place
       </button>
-      <PlaceExplorer trip={bundle.trip} places={bundle.places} onOpen={(placeId) => patch({ place: placeId })} />
+      {explorerOpen && <PlaceExplorer trip={bundle.trip} places={bundle.places} onOpen={(placeId) => patch({ place: placeId })} />}
     </div>
   );
 }
