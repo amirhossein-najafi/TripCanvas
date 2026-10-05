@@ -55,40 +55,42 @@ export function PlaceExplorer({
           .map((item) => {
             const score = votes.filter((vote) => vote.placeId === item.place.id && vote.vote === "up").length
               - votes.filter((vote) => vote.placeId === item.place.id && vote.vote === "down").length;
-            const priority = saved.find((entry) => entry.placeId === item.place.id)?.priority ?? "nice";
-            return { ...item, score, priority };
+            const savedEntry = saved.find((entry) => entry.placeId === item.place.id);
+            const priority = savedEntry?.priority ?? "nice";
+            return { ...item, score, priority, savedEntry };
           })
           .sort((a, b) => b.score - a.score || a.distance - b.distance)
-          .map(({ place, distance, score, priority }) => {
+          .map(({ place, distance, score, priority, savedEntry }) => {
           const meta = categoryMeta(place.category);
           const active = hovered === place.id;
           return (
-            <button
+            <div
               key={place.id}
-              type="button"
-              data-testid={`place-${place.id}`}
               onMouseEnter={() => setHovered(place.id)}
               onMouseLeave={() => setHovered(null)}
-              onClick={() => onOpen(place.id)}
               className={`flex w-full items-center gap-3 rounded-2xl px-2 py-2 text-left ${active ? "bg-foreground/5" : "hover:bg-foreground/5"}`}
             >
-              <span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-background text-lg">{meta.emoji}</span>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate font-medium">{place.name}</span>
-                <span className="font-mono text-xs text-muted tabular">
-                  {place.rating.toFixed(1)} ★ · {formatDistance(distance)} · {score} votes
+              <button type="button" data-testid={`place-${place.id}`} onClick={() => onOpen(place.id)} className="flex min-w-0 flex-1 items-center gap-3 text-left">
+                <span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-background text-lg">{meta.emoji}</span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium">{place.name}</span>
+                  <span className="font-mono text-xs text-muted tabular">
+                    {place.rating.toFixed(1)} ★ · {formatDistance(distance)} · {score} votes
+                  </span>
                 </span>
+              </button>
+              <span className="flex flex-col gap-1">
+                <button type="button" className="text-xs" aria-label={`Interested in ${place.name}`} onClick={() => tripState.actions.votePlace(place.id, "up")}>♥</button>
+                <button type="button" className="text-xs" aria-label={`Skip ${place.name}`} onClick={() => tripState.actions.votePlace(place.id, "down")}>↓</button>
+                {savedEntry && (
+                  <select className="text-xs" aria-label={`Priority for ${place.name}`} value={priority} onChange={(event) => tripState.actions.setPlacePriority(place.id, event.target.value as PlacePriority)}>
+                    <option value="must">Must</option>
+                    <option value="nice">Nice</option>
+                    <option value="skip">Skip</option>
+                  </select>
+                )}
               </span>
-              <span className="flex flex-col gap-1" onClick={(event) => event.stopPropagation()} onMouseDown={(event) => event.stopPropagation()}>
-                <button type="button" className="text-xs" onClick={() => tripState.actions.votePlace(place.id, "up")}>♥</button>
-                <button type="button" className="text-xs" onClick={() => tripState.actions.votePlace(place.id, "down")}>↓</button>
-                <select className="text-xs" value={priority} onChange={(event) => tripState.actions.setPlacePriority(place.id, event.target.value as PlacePriority)}>
-                  <option value="must">Must</option>
-                  <option value="nice">Nice</option>
-                  <option value="skip">Skip</option>
-                </select>
-              </span>
-            </button>
+            </div>
           );
         })}
         {places.length > 0 && !filtered.length && <p className="px-2 py-6 text-sm text-muted">Nothing matches that search.</p>}

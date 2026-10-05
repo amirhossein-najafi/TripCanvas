@@ -1,8 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
 
 async function addPlace(page: Page, query: string, id: string) {
+  await page.keyboard.press("Escape");
   const search = page.getByTestId("place-search");
   if (!(await search.isVisible())) await page.getByTestId("add-place").click();
+  await search.fill("");
   await search.fill(query);
   await page.getByTestId(`place-${id}`).click();
   await page.getByTestId("add-to-itinerary").click();
