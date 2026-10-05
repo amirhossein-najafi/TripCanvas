@@ -80,6 +80,24 @@ export function greeting(date = new Date()) {
   return "Good evening";
 }
 
+export function zonedDateISO(timeZone: string, date = new Date()) {
+  return new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
+}
+
+export function minutesInZone(timeZone: string, date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(date);
+  const hour = Number(parts.find((part) => part.type === "hour")?.value ?? 0);
+  const minute = Number(parts.find((part) => part.type === "minute")?.value ?? 0);
+  return hour * 60 + minute;
+}
+
+export function greetingInZone(timeZone: string, date = new Date()) {
+  const hour = Math.floor(minutesInZone(timeZone, date) / 60);
+  if (hour < 12) return "Good morning";
+  if (hour < 18) return "Good afternoon";
+  return "Good evening";
+}
+
 export function hourInZone(timeZone: string, date = new Date()) {
   const value = new Intl.DateTimeFormat("en-US", {
     hour: "numeric",

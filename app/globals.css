@@ -71,6 +71,9 @@ button, input, textarea, select { font: inherit; color: inherit; }
   cursor: pointer;
   position: relative;
 }
+.tc-marker.is-suggested { background: transparent; color: var(--c, var(--accent)); }
+.tc-marker.is-selected { box-shadow: 0 0 0 3px #c4841d; }
+.tc-marker.is-cluster { font-size: 11px; }
 .tc-marker.is-hot { transform: scale(1.15); z-index: 3; }
 .tc-marker.is-dim { opacity: 0.42; }
 .tc-marker.is-hot::after {

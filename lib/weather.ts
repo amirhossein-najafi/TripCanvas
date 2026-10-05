@@ -54,6 +54,21 @@ export function weatherEmoji(code: number) {
   return "☁️";
 }
 
+/** First clock time whose precipitation probability reaches the threshold. */
+export function firstRainHour(hours: { time: string; probability: number }[], threshold = 50): string | null {
+  const hit = hours.find((hour) => hour.probability >= threshold);
+  if (!hit) return null;
+  const match = /(\d{2}:\d{2})/.exec(hit.time);
+  return match?.[1] ?? null;
+}
+
+function fallbackHours(rain: number) {
+  return Array.from({ length: 24 }, (_, hour) => ({
+    time: `${String(hour).padStart(2, "0")}:00`,
+    probability: rain >= 50 && hour >= 15 ? rain : Math.max(0, rain - 40),
+  }));
+}
+
 export function weatherLabel(code: number) {
   if (code === 0) return "Clear";
   if (code <= 3) return "Cloudy";
@@ -80,7 +95,7 @@ export function fallbackWeather(destinationId: string, dates: string[]): DayWeat
       code,
       label: weatherLabel(code),
       emoji: weatherEmoji(code),
-      rainAfter: rain >= 50 ? "15:00" : null,
+      rainAfter: firstRainHour(fallbackHours(rain)),
     };
   });
 }
@@ -98,21 +113,28 @@ export async function loadWeather(options: {
     url.searchParams.set("latitude", String(options.lat));
     url.searchParams.set("longitude", String(options.lng));
     url.searchParams.set("daily", "weather_code,temperature_2m_max,precipitation_probability_max");
+    url.searchParams.set("hourly", "precipitation_probability");
     url.searchParams.set("timezone", options.timezone);
     url.searchParams.set("forecast_days", "16");
     const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
     if (!response.ok) return fallback;
     const data = (await response.json()) as {
       daily?: { time: string[]; temperature_2m_max: number[]; precipitation_probability_max: number[]; weather_code: number[] };
+      hourly?: { time: string[]; precipitation_probability: number[] };
     };
     if (!data.daily) return fallback;
     const byDate = new Map(data.daily.time.map((date, index) => [date, index]));
+    const hourly = data.hourly?.time.map((time, index) => ({
+      time,
+      probability: data.hourly?.precipitation_probability[index] ?? 0,
+    })) ?? [];
     return options.dates.map((date, index) => {
       const hit = byDate.get(date);
       if (hit == null) return fallback[index];
       const code = data.daily!.weather_code[hit] ?? 2;
       const rain = data.daily!.precipitation_probability_max[hit] ?? 0;
       const temp = Math.round(data.daily!.temperature_2m_max[hit] ?? fallback[index].temp);
+      const hours = hourly.filter((item) => item.time.startsWith(date));
       return {
         date,
         temp,
@@ -120,7 +142,7 @@ export async function loadWeather(options: {
         code,
         label: weatherLabel(code),
         emoji: weatherEmoji(code),
-        rainAfter: rain >= 50 ? "15:00" : null,
+        rainAfter: hours.length ? firstRainHour(hours) : firstRainHour(fallbackHours(rain)),
       };
     });
   } catch {
@@ -133,7 +155,7 @@ export function placeIsOutdoor(place: Place | undefined) {
 }
 
 /** Outdoor stops stay before the rain hour. Indoor stops move into it. */
-export function moveIndoorIntoRain(activities: Activity[], places: Place[], dayId: string): Activity[] {
+export function moveIndoorIntoRain(activities: Activity[], places: Place[], dayId: string, rainAt = 15 * 60): Activity[] {
   const dayActs = activitiesForDay(activities, dayId);
   const outdoor: Activity[] = [];
   const indoor: Activity[] = [];
@@ -145,7 +167,6 @@ export function moveIndoorIntoRain(activities: Activity[], places: Place[], dayI
   if (!indoor.length || !outdoor.length) return activities;
   const ordered = [...outdoor, ...indoor];
   let cursor = Math.min(...dayActs.map((activity) => toMinutes(activity.startTime)));
-  const rainAt = 15 * 60;
   const updated = new Map<string, Activity>();
   ordered.forEach((activity, index) => {
     const indoorStart = index === outdoor.length;

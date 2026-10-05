@@ -10,30 +10,34 @@ import {
   useSensor,
   useSensors,
   type DragEndEvent,
+  type DragMoveEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { motion } from "motion/react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { MapStage } from "@/components/map/map-stage";
 import { EmptyState } from "@/components/itinerary/empty-state";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/panel";
+import { ActivityEditor } from "@/components/trip/activity-editor";
+import { useTripPresence } from "@/features/collaboration/use-presence";
 import { useSession } from "@/features/auth/session";
 import { useTripParams } from "@/features/trips/use-trip-params";
 import { useTrip } from "@/features/trips/trip-provider";
 import { placeById } from "@/lib/catalog";
 import { categoryMeta } from "@/lib/categories";
-import { formatDayChip, formatDuration, formatFree, formatLong } from "@/lib/dates";
+import { formatDayChip, formatDuration, formatFree, formatLong, fromMinutes, minutesInZone, toMinutes } from "@/lib/dates";
 import { freeMinutes, suggestPlace } from "@/lib/fit";
-import { optimizeNearestNeighbor, routeMinutes } from "@/lib/geo";
+import { optimizeNearestNeighbor, routeMinutes, walkMinutes, haversine } from "@/lib/geo";
+import { estimateRoute, legSummary, orderByEta, routeBetween } from "@/lib/routing";
 import { activitiesForDay, applyOrder, dayLabel, makeLessBusy, moveActivity, replaceDayActivities, sequenceFrom } from "@/lib/itinerary";
 import { formatMoney } from "@/lib/money";
 import { useViewport } from "@/lib/use-viewport";
 import { nid } from "@/lib/utils";
-import { parsePlanPrompt, planPlaces } from "@/lib/plan-day";
+import { parsePlanPrompt, planWithConstraints } from "@/lib/plan-day";
 import { moveIndoorIntoRain } from "@/lib/weather";
 import { useUi } from "@/store/ui-store";
 import type { Activity, Place } from "@/types";
@@ -95,6 +99,11 @@ function Planner() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [planOpen, setPlanOpen] = useState(false);
   const [prompt, setPrompt] = useState("I want coffee, art and ramen, no more than 6km walking.");
+  const [preview, setPreview] = useState<{ removed: Activity[]; added: string[]; next: Activity[]; keep: boolean; reason: string | null } | null>(null);
+  const [undoActivities, setUndoActivities] = useState<Activity[] | null>(null);
+  const [editor, setEditor] = useState<Activity | null>(null);
+  const [legs, setLegs] = useState<Record<string, string>>({});
+  const presence = useTripPresence();
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -114,6 +123,20 @@ function Planner() {
     if (points.length < 3) return 0;
     return routeMinutes(points) - routeMinutes(optimizeNearestNeighbor(points));
   }, [dayActs]);
+  const legKey = dayActs.map((activity) => `${activity.id}:${activity.placeId}`).join("|");
+  useEffect(() => {
+    let stop = false;
+    const points = dayActs.map((activity) => ({ activity, place: placeById(activity.placeId) })).filter((item) => item.place);
+    Promise.all(points.slice(1).map(async (item, index) => {
+      const from = points[index].place!;
+      const to = item.place!;
+      const route = await routeBetween(from, to).catch(() => estimateRoute(from, to));
+      return [item.activity.id, legSummary(route)] as const;
+    })).then((rows) => {
+      if (!stop) setLegs(Object.fromEntries(rows));
+    });
+    return () => { stop = true; };
+  }, [legKey]);
   if (!bundle || !selected) return null;
   const current = bundle;
 
@@ -125,10 +148,18 @@ function Planner() {
     .filter((place) => !dayActs.some((activity) => activity.placeId === place.id));
   const suggestion = selected ? suggestPlace({ freeMin: free, anchor: lastPlace ?? { lat: bundle.trip.centerLat, lng: bundle.trip.centerLng }, places: savedPlaces }) : null;
 
+  function ghost(event: DragStartEvent | DragMoveEvent) {
+    const id = String(event.active.id);
+    const activity = bundle?.activities.find((item) => item.id === id);
+    const translated = event.active.rect.current.translated;
+    const over = "over" in event && event.over ? String(event.over.id) : null;
+    presence.publish({ drag: { activityId: id, title: activity?.title ?? "Activity", overId: over, x: translated?.left ?? 0, y: translated?.top ?? 0 } });
+  }
   function onDragStart(event: DragStartEvent) {
     const id = String(event.active.id);
     setActiveId(id);
     setDragging(id);
+    ghost(event);
   }
   function onDragEnd(event: DragEndEvent) {
     const id = String(event.active.id);
@@ -136,6 +167,7 @@ function Planner() {
     setActiveId(null);
     setOverId(null);
     setDragging(null);
+    presence.publish({ drag: null });
     if (!canEdit || !next || next === id) return;
     actions.move(id, next).catch(() => undefined);
   }
@@ -148,7 +180,18 @@ function Planner() {
         return place ? { id: activity.id, lat: place.lat, lng: place.lng } : null;
       })
       .filter((point): point is { id: string; lat: number; lng: number } => Boolean(point));
-    const ordered = optimizeNearestNeighbor(points).map((point) => point.id);
+    const costs = new Map<string, number>();
+    await Promise.all(points.flatMap((from) => points.map(async (to) => {
+      if (from.id === to.id) return;
+      const route = await routeBetween(from, to).catch(() => estimateRoute(from, to));
+      costs.set(`${from.id}>${to.id}`, route.minutes);
+    })));
+    const ordered = costs.size
+      ? orderByEta(points.map((point) => point.id), (from, to) => costs.get(`${from}>${to}`) ?? walkMinutes(haversine(
+        points.find((point) => point.id === from)!,
+        points.find((point) => point.id === to)!,
+      )))
+      : optimizeNearestNeighbor(points).map((point) => point.id);
     const rest = dayActs.filter((activity) => !ordered.includes(activity.id)).map((activity) => activity.id);
     const next = applyOrder(current.activities, selected.id, [...ordered, ...rest], true);
     await actions.commit(next, `${user.name} optimized ${dayLabel(current.days, selected.id)}.`);
@@ -185,19 +228,35 @@ function Planner() {
     const intent = parsePlanPrompt(prompt);
     if (intent.lessBusy && intent.categories.length === 0) {
       const { next, removed } = makeLessBusy(current.activities, selected.id);
-      await actions.commit(next, `${user.name} made ${dayLabel(current.days, selected.id)} less busy.`);
-      for (const activity of removed) if (activity.placeId) await actions.savePlace(activity.placeId);
-      setPlanOpen(false);
+      setPreview({ removed, added: [], next, keep: true, reason: null });
       return;
     }
-    const saved = current.saved.map((item) => placeById(item.placeId)).filter((place): place is Place => Boolean(place));
+    const saved = current.saved
+      .map((item) => {
+        const place = placeById(item.placeId);
+        return place ? { ...place, priority: item.priority, cost: 0 } : null;
+      })
+      .filter((place): place is NonNullable<typeof place> => Boolean(place));
     const anchorPlace = lastPlace ?? { lat: current.trip.centerLat, lng: current.trip.centerLng };
-    const { ordered } = planPlaces({ prompt, saved, anchor: anchorPlace });
-    if (!ordered.length) {
-      toast("Nothing saved fits that plan.");
+    const rainAfterMin = forecast?.rainAfter ? toMinutes(forecast.rainAfter) : null;
+    const blocked = current.bookings
+      .filter((booking) => booking.startAt.slice(0, 10) === selected.date)
+      .map((booking) => ({ start: toMinutes(booking.startAt.slice(11, 16) || "12:00"), end: toMinutes(booking.startAt.slice(11, 16) || "12:00") + 90, title: booking.title }));
+    const pool = intent.categories.length ? saved.filter((place) => intent.categories.includes(place.category)) : saved;
+    const planned = planWithConstraints({
+      places: pool,
+      anchor: anchorPlace,
+      maxWalkKm: intent.maxKm,
+      rainAfterMin,
+      blocked,
+      budget: Math.max(0, current.trip.budgetAmount - current.expenses.reduce((sum, expense) => sum + expense.amount, 0)),
+    });
+    const chosen = planned.ordered;
+    if (!chosen.length) {
+      setPreview({ removed: [], added: [], next: current.activities, keep: true, reason: planned.notes.at(-1) ?? "Nothing saved fits that plan." });
       return;
     }
-    const drafted: Activity[] = ordered.map((place, index) => ({
+    const drafted: Activity[] = chosen.map((place, index) => ({
       id: nid("act"),
       tripId: current.trip.id,
       dayId: selected.id,
@@ -212,8 +271,18 @@ function Planner() {
       status: "planned",
     }));
     const created = sequenceFrom(drafted, 9 * 60, 25);
-    const { next } = replaceDayActivities(current.activities, selected.id, created);
-    await actions.commit(next, `${user.name} planned ${dayLabel(current.days, selected.id)}.`);
+    const { next, removed } = replaceDayActivities(current.activities, selected.id, created);
+    setPreview({ removed, added: created.map((item) => item.title), next, keep: true, reason: planned.notes[0] ?? null });
+  }
+
+  async function confirmPlan() {
+    if (!preview || !selected || !user) return;
+    setUndoActivities(current.activities);
+    await actions.commit(preview.next, `${user.name} planned ${dayLabel(current.days, selected.id)}.`);
+    if (preview.keep) {
+      for (const activity of preview.removed) if (activity.placeId) await actions.savePlace(activity.placeId);
+    }
+    setPreview(null);
     setPlanOpen(false);
   }
 
@@ -231,7 +300,9 @@ function Planner() {
             <span className="relative">{item}</span>
           </button>
         ))}
-        <button type="button" className="ml-auto text-sm text-accent" onClick={() => setPlanOpen(true)}>Plan my day</button>
+        <button type="button" data-testid="plan-my-day" className="ml-auto text-sm text-accent" onClick={() => setPlanOpen(true)}>Plan my day</button>
+        {canEdit && <button type="button" className="text-sm text-muted" onClick={() => actions.undo()}>Undo</button>}
+        {canEdit && <button type="button" className="text-sm text-muted" onClick={() => actions.redo()}>Redo</button>}
       </div>
       {selected && forecast && (
         <div className="flex flex-wrap items-center gap-3 px-4 pt-4 text-sm">
@@ -246,7 +317,7 @@ function Planner() {
       {view === "calendar" && <CalendarView />}
       {view === "board" && <BoardView />}
       {view === "timeline" && (
-        <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={onDragStart} onDragOver={(event) => setOverId(event.over ? String(event.over.id) : null)} onDragCancel={() => { setActiveId(null); setDragging(null); }} onDragEnd={onDragEnd}>
+        <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={onDragStart} onDragMove={ghost} onDragOver={(event) => setOverId(event.over ? String(event.over.id) : null)} onDragCancel={() => { setActiveId(null); setDragging(null); presence.publish({ drag: null }); }} onDragEnd={onDragEnd}>
           <div className="min-h-0 flex-1 overflow-auto px-4 py-4" onScroll={(event) => {
             const root = event.currentTarget;
             const cards = [...root.querySelectorAll<HTMLElement>("[data-place]")];
@@ -270,10 +341,17 @@ function Planner() {
               </div>
             )}
             {!dayActs.length && <EmptyState destination={bundle.trip.destination} onExplore={() => setExplorer(true)} />}
+            {bundle.bookings.filter((booking) => booking.startAt.slice(0, 10) === selected.date).map((booking) => (
+              <p key={booking.id} className="mb-2 rounded-2xl border border-dashed border-border px-3 py-2 text-sm">{booking.startAt.slice(11, 16)} · {booking.title}</p>
+            ))}
             <SortableContext items={dayActs.map((activity) => activity.id)} strategy={verticalListSortingStrategy}>
               <div className="space-y-2">
+                <NowLine timezone={bundle.trip.timezone} date={selected.date} />
                 {dayActs.map((activity) => (
-                  <SortableCard key={activity.id} activity={activity} rainy={Boolean(forecast && forecast.rain >= 50 && placeById(activity.placeId) && !placeById(activity.placeId)!.indoor)} canEdit={canEdit} currency={bundle.trip.currency} />
+                  <div key={activity.id}>
+                    {legs[activity.id] && <p className="mb-1 ml-[88px] text-xs text-muted">{legs[activity.id]}</p>}
+                    <SortableCard activity={activity} rainy={Boolean(forecast && forecast.rain >= 50 && placeById(activity.placeId) && !placeById(activity.placeId)!.indoor)} canEdit={canEdit} currency={bundle.trip.currency} timezone={bundle.trip.timezone} date={selected.date} onEdit={() => setEditor(activity)} />
+                  </div>
                 ))}
               </div>
             </SortableContext>
@@ -288,10 +366,53 @@ function Planner() {
             <button key={example} type="button" className="rounded-full border border-border px-3 py-1 text-xs" onClick={() => setPrompt(example)}>{example}</button>
           ))}
         </div>
-        <Button className="mt-4" onClick={applyPlan}>Build the day</Button>
+        <Button className="mt-4" data-testid="build-day" onClick={applyPlan}>Build the day</Button>
+        {preview && (
+          <div data-testid="plan-preview" className="mt-4 space-y-2 text-sm">
+            <p className="font-medium">Here&apos;s your new plan</p>
+            {preview.reason && <p className="text-muted">{preview.reason}</p>}
+            {!!preview.removed.length && <div>Removed: {preview.removed.map((item) => item.title).join(", ")}</div>}
+            {!!preview.added.length && <div>Added: {preview.added.join(", ")}</div>}
+            <label className="flex items-center gap-2">
+              <input data-testid="keep-removed" type="checkbox" checked={preview.keep} onChange={(event) => setPreview({ ...preview, keep: event.target.checked })} />
+              Keep removed places in Ideas
+            </label>
+            <div className="flex gap-2">
+              {(preview.added.length > 0 || preview.removed.length > 0) && <Button size="sm" onClick={confirmPlan}>Apply</Button>}
+              <Button size="sm" variant="outline" onClick={() => setPreview(null)}>Cancel</Button>
+            </div>
+          </div>
+        )}
+        {undoActivities && <button type="button" className="mt-3 text-sm text-accent" onClick={() => { actions.commit(undoActivities, `${user?.name ?? "You"} undid the new plan.`); setUndoActivities(null); }}>Undo plan</button>}
       </Modal>
+      {view === "history" && (
+        <div className="min-h-0 flex-1 overflow-auto px-4 py-4">
+          <h2 className="font-serif text-3xl font-semibold">Version history</h2>
+          <div className="mt-4 space-y-3">
+            {bundle.snapshots.map((snap) => (
+              <article key={snap.id} className="rounded-2xl border border-border p-3">
+                <p>{snap.label}</p>
+                <p className="text-xs text-muted">{snap.createdAt}</p>
+                <div className="mt-2 flex gap-2">
+                  <Button size="sm" variant="outline" onClick={() => toast(snap.activities.map((item) => item.title).slice(0, 6).join(" · ") || "Empty day")}>Preview</Button>
+                  {canEdit && <Button size="sm" onClick={() => actions.restoreSnapshot(snap.id)}>Restore</Button>}
+                </div>
+              </article>
+            ))}
+            {!bundle.snapshots.length && <p className="text-sm text-muted">Moves, plans, and route optimizations show up here.</p>}
+          </div>
+        </div>
+      )}
+      {editor && <ActivityEditor activity={editor} onClose={() => setEditor(null)} />}
     </div>
   );
+}
+
+function NowLine({ timezone, date }: { timezone: string; date: string }) {
+  if (minutesInZone(timezone) < 0) return null;
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  if (today !== date) return null;
+  return <p className="text-xs text-accent">Now · {fromMinutes(minutesInZone(timezone))}</p>;
 }
 
 function DayChip({ id, label, active, hot, onClick, testId }: { id: string; label: string; active: boolean; hot: boolean; onClick: () => void; testId: string }) {
@@ -304,7 +425,7 @@ function DayChip({ id, label, active, hot, onClick, testId }: { id: string; labe
   );
 }
 
-function SortableCard({ activity, rainy, canEdit, currency }: { activity: Activity; rainy: boolean; canEdit: boolean; currency: string }) {
+function SortableCard({ activity, rainy, canEdit, currency, timezone, date, onEdit }: { activity: Activity; rainy: boolean; canEdit: boolean; currency: string; timezone: string; date: string; onEdit: () => void }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: activity.id, disabled: !canEdit });
   const patch = useTripParams().patch;
   const setFocus = useUi((state) => state.setFocusPlaceId);
@@ -329,20 +450,24 @@ function SortableCard({ activity, rainy, canEdit, currency }: { activity: Activi
         <span className="absolute top-0 bottom-0 left-1/2 w-px bg-border" />
         <span className="absolute top-4 left-1/2 h-2.5 w-2.5 -translate-x-1/2 rounded-full bg-accent" />
       </div>
-      <CardBody activity={activity} currency={currency} rainy={rainy} />
+      <CardBody activity={activity} currency={currency} rainy={rainy} timezone={timezone} date={date} onEdit={onEdit} />
     </article>
   );
 }
 
-function CardBody({ activity, currency, rainy, overlay }: { activity: Activity; currency: string; rainy?: boolean; overlay?: boolean }) {
+function CardBody({ activity, currency, rainy, overlay, timezone, date, onEdit }: { activity: Activity; currency: string; rainy?: boolean; overlay?: boolean; timezone?: string; date?: string; onEdit?: () => void }) {
   const { bundle, canEdit, actions } = useTrip();
   const place = placeById(activity.placeId);
   const [open, setOpen] = useState(false);
   const [body, setBody] = useState("");
   const comments = bundle?.comments.filter((comment) => comment.activityId === activity.id) ?? [];
   const cost = activity.actualCost ?? activity.plannedCost;
+  const now = timezone && date ? minutesInZone(timezone) : null;
+  const today = timezone ? new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()) : "";
+  const late = Boolean(now != null && date === today && activity.status === "planned" && toMinutes(activity.startTime) + 15 < now);
+  const tone = activity.status === "done" ? "border-secondary" : activity.status === "skipped" ? "opacity-60" : late ? "border-accent" : "";
   return (
-    <motion.div layout className={`rounded-[16px] border border-border bg-card p-3 ${overlay ? "shadow-[var(--shadow)]" : ""}`}>
+    <motion.div layout className={`rounded-[16px] border border-border bg-card p-3 ${tone} ${overlay ? "shadow-[var(--shadow)]" : ""}`}>
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="font-medium">{activity.title}</p>
@@ -352,9 +477,12 @@ function CardBody({ activity, currency, rainy, overlay }: { activity: Activity; 
             {cost > 0 && ` · ${formatMoney(cost, currency)}`}
           </p>
         </div>
-        <button type="button" className="text-sm text-muted" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setOpen((value) => !value); }}>
-          💬 {comments.length}
-        </button>
+        <div className="flex gap-2">
+          {onEdit && <button type="button" data-testid={`activity-edit-${activity.id}`} className="text-sm text-muted" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onEdit(); }}>Edit</button>}
+          <button type="button" className="text-sm text-muted" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setOpen((value) => !value); }}>
+            💬 {comments.length}
+          </button>
+        </div>
       </div>
       {rainy && <p className="mt-2 text-xs text-accent">Outdoor activity</p>}
       {open && !overlay && (

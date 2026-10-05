@@ -12,7 +12,9 @@ export function LandingMap({ center, zoom }: { center: [number, number]; zoom: n
   const ref = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibre | null>(null);
   const centerRef = useRef(center);
-  centerRef.current = center;
+  useEffect(() => {
+    centerRef.current = center;
+  }, [center]);
   const theme = resolvedTheme === "dark" ? "dark" : "light";
 
   useEffect(() => {

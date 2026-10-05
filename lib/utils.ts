@@ -7,7 +7,7 @@ export function cn(...inputs: ClassValue[]) {
 
 export function nid(prefix: string) {
   const id = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  return `${prefix}_${id.slice(0, 8)}`;
+  return `${prefix}_${id}`;
 }
 
 export function initials(name: string) {

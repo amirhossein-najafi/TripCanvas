@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { useTrip } from "@/features/trips/trip-provider";
 import { EXPENSE_CATEGORIES, type ExpenseCategory } from "@/types";
 import { equalShares, formatMoney, settleBalances } from "@/lib/money";
+import { splitByWeights, toBase } from "@/lib/fx";
 
 type FormValues = {
   title: string;
@@ -13,20 +14,29 @@ type FormValues = {
   plannedAmount: number;
   category: ExpenseCategory;
   paidBy: string;
-  split: "equal" | "personal";
+  split: "equal" | "personal" | "shares";
+  currency: string;
+  weights: string;
 };
 
 export function BudgetView() {
   const { bundle, canEdit, actions } = useTrip();
   const [open, setOpen] = useState(false);
-  const form = useForm<FormValues>({ defaultValues: { title: "", amount: 0, plannedAmount: 0, category: "Food", paidBy: "", split: "equal" } });
+  const [person, setPerson] = useState("");
+  const form = useForm<FormValues>({ defaultValues: { title: "", amount: 0, plannedAmount: 0, category: "Food", paidBy: "", split: "equal", currency: "USD", weights: "" } });
   if (!bundle) return null;
-  const spent = bundle.expenses.reduce((sum, expense) => sum + expense.amount, 0);
+  const people = bundle.participants.length
+    ? bundle.participants
+    : bundle.members.map((member) => ({ id: member.userId, tripId: bundle.trip.id, name: member.user.name, userId: member.userId }));
+  const names = Object.fromEntries([
+    ...bundle.members.map((member) => [member.userId, member.user.name] as const),
+    ...people.map((person) => [person.id, person.name] as const),
+  ]);
+  const spent = bundle.expenses.reduce((sum, expense) => sum + toBase(expense.amount, expense.currency || bundle.trip.currency, bundle.trip.currency, bundle.trip.fxRates), 0);
   const remaining = bundle.trip.budgetAmount - spent;
-  const names = Object.fromEntries(bundle.members.map((member) => [member.userId, member.user.name]));
   const lines = settleBalances(
     bundle.expenses.map((expense) => ({
-      amount: expense.amount,
+      amount: toBase(expense.amount, expense.currency || bundle.trip.currency, bundle.trip.currency, bundle.trip.fxRates),
       paidBy: expense.paidBy,
       shares: bundle.shares.filter((share) => share.expenseId === expense.id),
     })),
@@ -79,6 +89,27 @@ export function BudgetView() {
         })}
       </div>
       <section className="mt-8">
+        <h2 className="font-serif text-2xl font-semibold">People</h2>
+        <p className="mt-1 text-sm text-muted">Travelers can exist without an account.</p>
+        <div className="mt-2 space-y-1">
+          {people.map((person) => <p key={person.id}>{person.name}{person.userId ? "" : " · no account"}</p>)}
+        </div>
+        {canEdit && (
+          <form className="mt-2 flex gap-2" onSubmit={(event) => { event.preventDefault(); if (!person.trim()) return; actions.addParticipant(person); setPerson(""); }}>
+            <input value={person} onChange={(event) => setPerson(event.target.value)} placeholder="Name" className="h-10 flex-1 rounded-xl bg-background px-3" />
+            <Button type="submit" size="sm">Add</Button>
+          </form>
+        )}
+        {canEdit && (
+          <label className="mt-3 block text-sm">JPY per 1 {bundle.trip.currency} is inverted: units of {bundle.trip.currency} for 1 foreign unit
+            <input className="mt-1 h-10 w-full rounded-xl bg-background px-3" placeholder="JPY rate" onBlur={(event) => {
+              const rate = Number(event.target.value);
+              if (rate > 0) actions.setFxRate("JPY", rate);
+            }} />
+          </label>
+        )}
+      </section>
+      <section className="mt-8">
         <h2 className="font-serif text-2xl font-semibold">Balances</h2>
         <div className="mt-3 space-y-2">
           {lines.map((line) => <p key={line.text}>{line.text}</p>)}
@@ -89,14 +120,23 @@ export function BudgetView() {
         <form
           className="mt-8 space-y-3 rounded-[18px] border border-border p-4"
           onSubmit={form.handleSubmit(async (values) => {
-            const members = bundle.members.map((member) => member.userId);
-            const shares = values.split === "equal" ? equalShares(Number(values.amount), members) : [{ userId: values.paidBy || bundle.trip.ownerId, amount: Number(values.amount) }];
+            const ids = people.map((person) => person.id);
+            const payer = values.paidBy || ids[0] || bundle.trip.ownerId;
+            const amount = toBase(Number(values.amount), values.currency || bundle.trip.currency, bundle.trip.currency, bundle.trip.fxRates);
+            const weights = values.weights.split(",").map((part) => Number(part.trim())).filter((part) => part > 0);
+            const shares = values.split === "shares" && weights.length === ids.length
+              ? splitByWeights(amount, ids.map((id, index) => ({ id, weight: weights[index] }))).map((share) => ({ userId: share.id, participantId: share.id, amount: share.amount }))
+              : values.split === "equal"
+                ? equalShares(amount, ids).map((share) => ({ ...share, participantId: share.userId }))
+                : [{ userId: payer, participantId: payer, amount }];
             await actions.createExpense({
               title: values.title,
               amount: Number(values.amount),
               plannedAmount: Number(values.plannedAmount || values.amount),
               category: values.category,
-              paidBy: values.paidBy || bundle.trip.ownerId,
+              paidBy: payer,
+              currency: values.currency || bundle.trip.currency,
+              participantId: payer,
               shares,
             });
             form.reset();
@@ -113,12 +153,17 @@ export function BudgetView() {
               </div>
               <select {...form.register("category")} className="h-10 w-full rounded-xl bg-background px-3">{EXPENSE_CATEGORIES.map((category) => <option key={category}>{category}</option>)}</select>
               <select {...form.register("paidBy")} className="h-10 w-full rounded-xl bg-background px-3">
-                {bundle.members.map((member) => <option key={member.userId} value={member.userId}>{member.user.name}</option>)}
+                {people.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}
+              </select>
+              <select {...form.register("currency")} className="h-10 w-full rounded-xl bg-background px-3">
+                {[bundle.trip.currency, "USD", "EUR", "JPY"].filter((code, index, list) => list.indexOf(code) === index).map((code) => <option key={code}>{code}</option>)}
               </select>
               <select {...form.register("split")} className="h-10 w-full rounded-xl bg-background px-3">
                 <option value="equal">Split equally</option>
+                <option value="shares">Custom shares</option>
                 <option value="personal">Just the payer</option>
               </select>
+              <input {...form.register("weights")} placeholder="Share weights, comma separated" className="h-10 w-full rounded-xl bg-background px-3" />
               <Button type="submit">Save expense</Button>
             </>
           )}

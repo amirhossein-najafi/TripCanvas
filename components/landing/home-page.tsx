@@ -4,6 +4,7 @@ import { motion, useMotionValue, useTransform } from "motion/react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import { useMounted } from "@/lib/use-mounted";
 import { useTheme } from "next-themes";
 import { LandingMap } from "@/components/map/landing-map";
 import { Button } from "@/components/ui/button";
@@ -23,8 +24,7 @@ const SHOWCASE = [
 
 export function HomePage() {
   const { user, ready } = useSession();
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
+  const mounted = useMounted();
   const signedIn = mounted && ready && Boolean(user);
   const { resolvedTheme, setTheme } = useTheme();
   const router = useRouter();

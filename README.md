@@ -4,6 +4,10 @@
 
 An interactive trip planner: a day-by-day plan, a map, a budget, bookings, and collaboration on one trip. The map and the cards move together.
 
+## What to publish
+
+Ship the source, not a build. `.gitignore` already skips `.next`, `node_modules`, and `test-results`. A portfolio archive or GitHub repo should include `app`, `components`, `features`, `lib`, `public`, `supabase`, `store`, `types`, `package.json`, `package-lock.json`, the config files, and this README. Leave out `.next`, `node_modules`, and `.git`.
+
 ## Quick start
 
 ```bash
@@ -39,7 +43,7 @@ Only the trip owner can delete it: open **•••**, then **Settings**, then *
 - **Map.** Numbered markers, a route color per day, and a camera that follows the timeline as you scroll. Light and dark mode change the map too.
 - **Budget.** Total, spent, and remaining. Hotel, Food, Transport, Activities, Shopping. Planned against actual, and balances such as `Sara owes Ali $54`.
 - **Bookings.** Flights, hotels, tickets, notes, and **Show ticket** with a full-screen QR code.
-- **Collaborate.** Invite people with `/t/[slug]`. Roles are Owner, Editor, and Viewer. Presence avatars and comments sit on activities. A public trip lives at `/p/[slug]` with **Duplicate this trip**.
+- **Collaborate.** Invite people with a token link `/t/[token]` and a role of Editor or Viewer. A public itinerary lives at `/p/[slug]` and does not include bookings, expenses, comments, or emails. **Duplicate this trip** copies the public plan.
 - **Polish.** `Ctrl` or `Cmd` + `K` creates a trip, adds a place, opens a trip, jumps to bookings, and toggles dark mode. Loading states are skeletons. If the map fails: `We couldn't load the map.` and `Your itinerary is safe.`
 
 ## The extra layer
@@ -65,7 +69,7 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
 ```
 
-The service role key is for seeding only and must not reach the client. Schema, RLS, the booking-files bucket, and Realtime are in `supabase/migrations/0001_init.sql`. Apply it with `supabase db push` or the SQL Editor. Auth, Postgres, Storage, and live presence then use the same interface.
+The service role key is for seeding only and must not reach the client. Schema, RLS, invites, the booking-files bucket, and Realtime are in `supabase/migrations`. Apply every file, in order, with `supabase db push` or the SQL Editor. Auth, Postgres, Storage, and live presence then use the same interface.
 
 ## Scripts
 
@@ -73,7 +77,9 @@ The service role key is for seeding only and must not reach the client. Schema, 
 | --- | --- |
 | `npm run dev` | Start the dev server |
 | `npm run build` then `npm start` | Production build and server |
-| `npm test` | Vitest for routing, balances, and free-time fit |
+| `npm test` | Vitest for routing, balances, invites, and planning |
+| `npm run lint` | ESLint |
+| `npm run typecheck` | TypeScript |
 | `npm run test:e2e` | Playwright: create a Tokyo trip, add Shibuya, drag it to the next day, see the marker |
 
 ## Stack

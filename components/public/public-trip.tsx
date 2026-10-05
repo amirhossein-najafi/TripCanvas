@@ -21,7 +21,7 @@ export function PublicTrip({ slug }: { slug: string }) {
   const bundle = query.data;
   if (query.isLoading) return <div className="p-8">Loading the trip…</div>;
   if (!bundle) return <div className="grid min-h-dvh place-items-center px-6 text-center"><div><p className="font-serif text-4xl font-semibold">This trip is private.</p><Link href="/" className="mt-4 inline-block text-accent">Back home</Link></div></div>;
-  const owner = bundle.members.find((member) => member.role === "owner")?.user.name ?? "Someone";
+  const owner = bundle.owner.name || "Someone";
   const markers = bundle.days.flatMap((day, index) => activitiesForDay(bundle.activities, day.id).flatMap((activity, activityIndex) => {
     const place = placeById(activity.placeId);
     if (!place) return [];

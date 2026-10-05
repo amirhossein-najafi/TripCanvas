@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
+import { useMounted } from "@/lib/use-mounted";
 import { Button } from "@/components/ui/button";
 import { useSession } from "@/features/auth/session";
 import { getRepository } from "@/lib/api";
@@ -11,11 +12,9 @@ import { formatRange, tripLengthLabel } from "@/lib/dates";
 
 export default function TripsPage() {
   const { user, ready, signOut } = useSession();
-  const [mounted, setMounted] = useState(false);
+  const mounted = useMounted();
   const router = useRouter();
   const query = useQuery({ queryKey: ["trips", user?.id], enabled: ready && Boolean(user), queryFn: () => getRepository().listTrips() });
-
-  useEffect(() => setMounted(true), []);
   useEffect(() => {
     if (ready && !user) router.replace("/login?next=/trips");
   }, [ready, user, router]);

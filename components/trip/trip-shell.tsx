@@ -10,7 +10,8 @@ import { MapStage } from "@/components/map/map-stage";
 import { PlaceDrawer } from "@/components/places/place-drawer";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/panel";
-import { usePresence } from "@/features/collaboration/use-presence";
+import { PresenceProvider, useTripPresence } from "@/features/collaboration/use-presence";
+import { getRepository } from "@/lib/api";
 import { useSession } from "@/features/auth/session";
 import { useTripParams } from "@/features/trips/use-trip-params";
 import { TripProvider, useTrip } from "@/features/trips/trip-provider";
@@ -69,6 +70,7 @@ function TripShell({ children }: { children: React.ReactNode }) {
   if (bare) return <>{children}</>;
 
   return (
+    <PresenceProvider tripId={bundle.trip.id} user={user}>
     <div className="flex h-dvh flex-col bg-background">
       <TripHeader />
       <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(380px,480px)_minmax(0,1fr)]">
@@ -86,13 +88,18 @@ function TripShell({ children }: { children: React.ReactNode }) {
       <PlacePortal />
       <ShortcutKeys />
     </div>
+    </PresenceProvider>
   );
 }
 
 function TripHeader() {
   const { bundle, role } = useTrip();
-  const { user } = useSession();
-  const online = usePresence(bundle?.trip.id, user);
+  const { onlineIds, peers, publish } = useTripPresence();
+  useEffect(() => {
+    const onMove = (event: PointerEvent) => publish({ cursor: { x: event.clientX + 12, y: event.clientY + 12, surface: "app" } });
+    window.addEventListener("pointermove", onMove);
+    return () => window.removeEventListener("pointermove", onMove);
+  }, [publish]);
   const [share, setShare] = useState(false);
   if (!bundle) return null;
   return (
@@ -102,7 +109,7 @@ function TripHeader() {
       <div className="ml-auto flex items-center gap-2">
         <div className="flex -space-x-2">
           {bundle.members.map((member) => (
-            <span key={member.userId} title={`${member.user.name} · ${member.role}`} className={`grid h-8 w-8 place-items-center rounded-full border-2 border-card bg-foreground text-xs text-background ${online.includes(member.userId) ? "ring-2 ring-secondary" : ""}`}>
+            <span key={member.userId} title={`${member.user.name} · ${member.role}`} className={`grid h-8 w-8 place-items-center rounded-full border-2 border-card bg-foreground text-xs text-background ${onlineIds.includes(member.userId) ? "ring-2 ring-secondary" : ""}`}>
               {member.user.avatar || member.user.name.slice(0, 1)}
             </span>
           ))}
@@ -112,6 +119,8 @@ function TripHeader() {
         {role === "viewer" && <span className="text-xs text-muted">Viewing</span>}
       </div>
       <ShareDialog open={share} onClose={() => setShare(false)} />
+      <PeerCursors peers={peers} />
+      <SyncNote />
     </header>
   );
 }
@@ -127,6 +136,8 @@ function MoreMenu() {
         <Dropdown.Content className="modal-pop z-40 min-w-48 rounded-2xl border border-border bg-card p-1 shadow-[var(--shadow)]">
           <Dropdown.Item asChild><Link className="block rounded-xl px-3 py-2 text-sm outline-none hover:bg-foreground/5" href={href(`/trips/${tripId}/travel`)}>Travel mode</Link></Dropdown.Item>
           <Dropdown.Item asChild><Link className="block rounded-xl px-3 py-2 text-sm outline-none hover:bg-foreground/5" href={`/trips/${tripId}/story`}>Present trip</Link></Dropdown.Item>
+          <Dropdown.Item asChild><Link className="block rounded-xl px-3 py-2 text-sm outline-none hover:bg-foreground/5" href={`/trips/${tripId}/recap`}>Trip recap</Link></Dropdown.Item>
+          <Dropdown.Item asChild><Link className="block rounded-xl px-3 py-2 text-sm outline-none hover:bg-foreground/5" href={`/trips/${tripId}/itinerary?view=history`}>Version history</Link></Dropdown.Item>
           <Dropdown.Item asChild><Link className="block rounded-xl px-3 py-2 text-sm outline-none hover:bg-foreground/5" href={href(`/trips/${tripId}/settings`)}>Settings</Link></Dropdown.Item>
           <Dropdown.Item className="rounded-xl px-3 py-2 text-sm outline-none hover:bg-foreground/5" onSelect={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}>Toggle dark mode</Dropdown.Item>
         </Dropdown.Content>
@@ -137,13 +148,32 @@ function MoreMenu() {
 
 function ShareDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { bundle, canEdit, actions, role } = useTrip();
+  const [inviteRole, setInviteRole] = useState<"viewer" | "editor">("viewer");
+  const [token, setToken] = useState("");
+  useEffect(() => {
+    if (!open || !canEdit) return;
+    let stop = false;
+    getRepository().createInvite(bundle!.trip.id, inviteRole).then((invite) => {
+      if (!stop) setToken(invite.token);
+    }).catch(() => undefined);
+    return () => { stop = true; };
+  }, [open, canEdit, inviteRole, bundle?.trip.id]);
   if (!bundle) return null;
   const origin = typeof window === "undefined" ? "" : window.location.origin;
-  const invite = `${origin}/t/${bundle.trip.slug}`;
+  const invite = token ? `${origin}/t/${token}` : "Creating a private invite…";
   const pub = `${origin}/p/${bundle.trip.slug}`;
   return (
     <Modal open={open} onClose={onClose} title="Share this trip">
-      <p className="text-sm text-muted">Invite with a role. Editors can change the plan. Viewers can look.</p>
+      <p className="text-sm text-muted">Invite with a role. Editors can change the plan. Viewers can look. The link is a token, not the trip name.</p>
+      {canEdit && (
+        <label className="mt-3 block text-sm">
+          Role
+          <select className="mt-1 h-10 w-full rounded-xl bg-background px-3" value={inviteRole} onChange={(event) => setInviteRole(event.target.value as "viewer" | "editor")}>
+            <option value="viewer">Viewer</option>
+            <option value="editor">Editor</option>
+          </select>
+        </label>
+      )}
       <CopyRow label="Invite link" value={invite} />
       <label className="mt-4 flex items-center gap-2 text-sm">
         <input type="checkbox" checked={bundle.trip.isPublic} disabled={role !== "owner"} onChange={(event) => actions.updateTrip({ isPublic: event.target.checked })} />
@@ -152,6 +182,45 @@ function ShareDialog({ open, onClose }: { open: boolean; onClose: () => void }) 
       {bundle.trip.isPublic && <CopyRow label="Public page" value={pub} />}
       {!canEdit && <p className="mt-3 text-xs text-muted">You can view this trip, not change who joins.</p>}
     </Modal>
+  );
+}
+
+function PeerCursors({ peers }: { peers: { id: string; name: string; cursor: { x: number; y: number } | null; drag: { title: string; x: number; y: number } | null }[] }) {
+  return (
+    <>
+      {peers.map((peer) => (
+        <div key={peer.id}>
+          {peer.cursor && (
+            <div className="pointer-events-none fixed z-50" style={{ left: peer.cursor.x, top: peer.cursor.y }}>
+              <span className="rounded-full bg-secondary px-2 py-0.5 text-xs text-white">{peer.name}</span>
+            </div>
+          )}
+          {peer.drag && (
+            <div className="pointer-events-none fixed z-50 rounded-2xl border border-border bg-card/80 px-3 py-2 text-sm shadow-[var(--shadow)]" style={{ left: peer.drag.x, top: peer.drag.y }}>
+              {peer.name} · {peer.drag.title}
+            </div>
+          )}
+        </div>
+      ))}
+    </>
+  );
+}
+
+function SyncNote() {
+  const { pendingSync, conflict, keepDeviceCopy, takeServerCopy } = useTrip();
+  if (!pendingSync && !conflict) return null;
+  return (
+    <div className="fixed bottom-20 left-1/2 z-40 w-[min(440px,calc(100%-2rem))] -translate-x-1/2 rounded-2xl border border-border bg-card px-4 py-3 text-sm shadow-[var(--shadow)]">
+      {conflict ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <p>This trip changed while you were offline.</p>
+          <Button size="sm" onClick={keepDeviceCopy}>Keep mine</Button>
+          <Button size="sm" variant="outline" onClick={() => takeServerCopy()}>Use server</Button>
+        </div>
+      ) : (
+        <p>{pendingSync} change{pendingSync === 1 ? "" : "s"} waiting to sync.</p>
+      )}
+    </div>
   );
 }
 

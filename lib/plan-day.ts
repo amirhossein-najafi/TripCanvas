@@ -1,5 +1,5 @@
 import { haversine, optimizeNearestNeighbor, routeKm } from "@/lib/geo";
-import type { Place, PlaceCategory } from "@/types";
+import type { Place, PlaceCategory, PlacePriority } from "@/types";
 
 export type PlanIntent = {
   categories: PlaceCategory[];
@@ -73,4 +73,82 @@ export function planPlaces(options: {
     if (chosen.length >= 4) break;
   }
   return { intent, ordered: chosen };
+}
+
+export type PlannerInput = {
+  places: (Place & { priority?: PlacePriority; cost?: number })[];
+  anchor: { lat: number; lng: number };
+  dayStart?: number;
+  dayEnd?: number;
+  maxWalkKm?: number | null;
+  budget?: number | null;
+  rainAfterMin?: number | null;
+  blocked?: { start: number; end: number; title: string }[];
+  legKm?: (from: { lat: number; lng: number }, to: { lat: number; lng: number }) => number;
+};
+
+/** Orders saved places against opening hours, fixed bookings, weather, walking, and budget. */
+export function planWithConstraints(input: PlannerInput) {
+  const notes: string[] = [];
+  const legKm = input.legKm ?? ((from, to) => haversine(from, to));
+  const start = input.dayStart ?? 9 * 60;
+  const end = input.dayEnd ?? 21 * 60;
+  const pool = input.places.filter((place) => place.priority !== "skip" && place.category !== "hotel");
+  const ranked = [...pool].sort((a, b) => rank(a.priority) - rank(b.priority) || haversine(input.anchor, a) - haversine(input.anchor, b));
+  const chosen: Place[] = [];
+  let cursor = input.anchor;
+  let clock = start;
+  let walked = 0;
+  let spent = 0;
+  const blocked = [...(input.blocked ?? [])].sort((a, b) => a.start - b.start);
+
+  for (const place of ranked) {
+    const km = legKm(cursor, place);
+    const travel = walkMinutes(km);
+    let arrival = clock + travel;
+    const block = blocked.find((item) => arrival < item.end && arrival + place.durationMin > item.start);
+    if (block) arrival = block.end + travel;
+    const open = place.openHour * 60;
+    const close = place.closeHour * 60;
+    if (arrival < open) arrival = open;
+    if (arrival + Math.min(place.durationMin, 60) > close) {
+      notes.push(`${place.name} closes at ${String(place.closeHour).padStart(2, "0")}:00.`);
+      continue;
+    }
+    if (input.rainAfterMin != null && !place.indoor && arrival >= input.rainAfterMin) {
+      notes.push(`${place.name} is outdoor after the rain starts.`);
+      if (place.priority !== "must") continue;
+    }
+    if (input.maxWalkKm != null && walked + km > input.maxWalkKm && chosen.length) {
+      notes.push(`Walking would pass ${input.maxWalkKm} km.`);
+      continue;
+    }
+    const cost = place.cost ?? 0;
+    if (input.budget != null && spent + cost > input.budget && cost > 0) {
+      notes.push(`${place.name} is over the remaining budget.`);
+      continue;
+    }
+    if (arrival + place.durationMin > end) {
+      notes.push(`${place.name} does not fit before the day ends.`);
+      continue;
+    }
+    chosen.push(place);
+    walked += km;
+    spent += cost;
+    clock = arrival + place.durationMin + 15;
+    cursor = place;
+    if (chosen.length >= 6) break;
+  }
+  if (!chosen.length) notes.push("Nothing saved fits these constraints.");
+  return { ordered: chosen, notes, walkedKm: walked };
+}
+
+function rank(priority: PlacePriority | undefined) {
+  if (priority === "must") return 0;
+  if (priority === "skip") return 2;
+  return 1;
+}
+
+function walkMinutes(km: number) {
+  return Math.max(1, Math.round((km / 4.5) * 60));
 }

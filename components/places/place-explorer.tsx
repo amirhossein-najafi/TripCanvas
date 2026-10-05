@@ -3,8 +3,9 @@
 import { useState } from "react";
 import { categoryMeta } from "@/lib/categories";
 import { formatDistance, haversine } from "@/lib/geo";
+import { useTrip } from "@/features/trips/trip-provider";
 import { useUi } from "@/store/ui-store";
-import type { Place, Trip } from "@/types";
+import type { Place, PlacePriority, Trip } from "@/types";
 
 export function PlaceExplorer({
   trip,
@@ -19,6 +20,9 @@ export function PlaceExplorer({
   const hovered = useUi((state) => state.hoveredPlaceId);
   const setHovered = useUi((state) => state.setHoveredPlaceId);
   const [text, setText] = useState("");
+  const tripState = useTrip();
+  const saved = tripState.bundle?.saved ?? [];
+  const votes = tripState.bundle?.votes ?? [];
   if (!open) return null;
 
   const filtered = places
@@ -47,7 +51,15 @@ export function PlaceExplorer({
             <div className="skeleton h-14" />
           </div>
         )}
-        {filtered.map(({ place, distance }) => {
+        {filtered
+          .map((item) => {
+            const score = votes.filter((vote) => vote.placeId === item.place.id && vote.vote === "up").length
+              - votes.filter((vote) => vote.placeId === item.place.id && vote.vote === "down").length;
+            const priority = saved.find((entry) => entry.placeId === item.place.id)?.priority ?? "nice";
+            return { ...item, score, priority };
+          })
+          .sort((a, b) => b.score - a.score || a.distance - b.distance)
+          .map(({ place, distance, score, priority }) => {
           const meta = categoryMeta(place.category);
           const active = hovered === place.id;
           return (
@@ -64,8 +76,17 @@ export function PlaceExplorer({
               <span className="min-w-0 flex-1">
                 <span className="block truncate font-medium">{place.name}</span>
                 <span className="font-mono text-xs text-muted tabular">
-                  {place.rating.toFixed(1)} ★ · {formatDistance(distance)}
+                  {place.rating.toFixed(1)} ★ · {formatDistance(distance)} · {score} votes
                 </span>
+              </span>
+              <span className="flex flex-col gap-1" onClick={(event) => event.stopPropagation()} onMouseDown={(event) => event.stopPropagation()}>
+                <button type="button" className="text-xs" onClick={() => tripState.actions.votePlace(place.id, "up")}>♥</button>
+                <button type="button" className="text-xs" onClick={() => tripState.actions.votePlace(place.id, "down")}>↓</button>
+                <select className="text-xs" value={priority} onChange={(event) => tripState.actions.setPlacePriority(place.id, event.target.value as PlacePriority)}>
+                  <option value="must">Must</option>
+                  <option value="nice">Nice</option>
+                  <option value="skip">Skip</option>
+                </select>
               </span>
             </button>
           );

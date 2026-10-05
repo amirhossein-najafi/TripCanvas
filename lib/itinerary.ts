@@ -11,7 +11,7 @@ export function buildDays(tripId: string, dates: string[], ids?: string[]): Day[
   }));
 }
 
-export function activitiesForDay(activities: Activity[], dayId: string) {
+export function activitiesForDay<T extends { dayId: string; position: number; startTime: string }>(activities: T[], dayId: string) {
   return activities.filter((activity) => activity.dayId === dayId).sort((a, b) => a.position - b.position || a.startTime.localeCompare(b.startTime));
 }
 

@@ -69,7 +69,7 @@ export function AuthScreen() {
         </button>
         {repositoryMode() === "local" && (
           <div className="mt-6 border-t border-border pt-4">
-            <p className="text-xs text-muted">Demo password: {DEMO_PASSWORD}</p>
+            <p className="text-xs text-muted">Demo / offline sandbox. Passwords here stay on this device and are not real accounts. Supabase mode is the real sign-in. Demo password: {DEMO_PASSWORD}</p>
             <div className="mt-2 flex flex-wrap gap-2">
               {demoUsers.map((user) => (
                 <Button key={user.id} type="button" data-testid={`continue-${user.name.toLowerCase()}`} size="sm" variant="outline" onClick={async () => { try { await signIn(user.email, user.password); await finish(); } catch (error) { toast.error(error instanceof Error ? error.message : "Couldn't sign in."); } }}>

@@ -46,6 +46,9 @@ export type Trip = {
   travelerCount: number;
   centerLat: number;
   centerLng: number;
+  revision: number;
+  /** How many units of the trip currency equal 1 unit of the key currency. */
+  fxRates: Record<string, number>;
 };
 
 export type TripMember = {
@@ -95,14 +98,19 @@ export type Activity = {
   status: ActivityStatus;
 };
 
+export type PlacePriority = "must" | "nice" | "skip";
+
 export type SavedPlace = {
   id: string;
   tripId: string;
   placeId: string;
   note: string;
+  priority: PlacePriority;
 };
 
 export type BookingType = "flight" | "hotel" | "ticket" | "train" | "other";
+
+export type BarcodeType = "qr" | "code128";
 
 export type Booking = {
   id: string;
@@ -114,6 +122,8 @@ export type Booking = {
   attachmentUrl: string | null;
   attachmentName: string | null;
   notes: string;
+  barcodeValue: string | null;
+  barcodeType: BarcodeType;
 };
 
 export type ExpenseCategory = "Hotel" | "Food" | "Transport" | "Activities" | "Shopping";
@@ -127,6 +137,8 @@ export type Expense = {
   category: ExpenseCategory;
   paidBy: string;
   activityId: string | null;
+  currency: string;
+  participantId: string | null;
 };
 
 export type ExpenseShare = {
@@ -135,6 +147,7 @@ export type ExpenseShare = {
   tripId: string;
   userId: string;
   amount: number;
+  participantId: string | null;
 };
 
 export type Comment = {
@@ -156,6 +169,76 @@ export type ActivityEvent = {
 
 export type MemberProfile = TripMember & { user: User };
 
+export type TripInvite = {
+  id: string;
+  tripId: string;
+  token: string;
+  role: Exclude<Role, "owner">;
+  createdBy: string;
+  expiresAt: string;
+  maxUses: number;
+  usedCount: number;
+};
+
+export type Participant = {
+  id: string;
+  tripId: string;
+  name: string;
+  userId: string | null;
+};
+
+export type PlaceVoteValue = "up" | "down";
+
+export type PlaceVote = {
+  id: string;
+  tripId: string;
+  placeId: string;
+  userId: string;
+  vote: PlaceVoteValue;
+};
+
+export type TripSnapshot = {
+  id: string;
+  tripId: string;
+  revision: number;
+  label: string;
+  createdAt: string;
+  activities: Activity[];
+  saved: SavedPlace[];
+};
+
+export type PublicTrip = {
+  id: string;
+  title: string;
+  destination: string;
+  destinationId: string;
+  startDate: string;
+  endDate: string;
+  coverImage: string;
+  timezone: string;
+  slug: string;
+  centerLat: number;
+  centerLng: number;
+};
+
+export type PublicActivity = {
+  id: string;
+  dayId: string;
+  placeId: string | null;
+  title: string;
+  startTime: string;
+  duration: number;
+  position: number;
+};
+
+export type PublicTripBundle = {
+  trip: PublicTrip;
+  days: Day[];
+  activities: PublicActivity[];
+  places: Place[];
+  owner: { name: string; avatar: string };
+};
+
 export type TripBundle = {
   trip: Trip;
   members: MemberProfile[];
@@ -168,6 +251,10 @@ export type TripBundle = {
   comments: Comment[];
   events: ActivityEvent[];
   places: Place[];
+  invites: TripInvite[];
+  participants: Participant[];
+  votes: PlaceVote[];
+  snapshots: TripSnapshot[];
 };
 
 export type SearchResults = {

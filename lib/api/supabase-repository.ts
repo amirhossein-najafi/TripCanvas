@@ -5,7 +5,8 @@ import { RepoError, type ActivityInput, type BookingInput, type ExpenseInput, ty
 import { buildTokyoSample } from "@/lib/sample-trip";
 import { browserSupabase } from "@/lib/supabase/client";
 import { nid, slugify } from "@/lib/utils";
-import type { Activity, Booking, Comment, Day, Expense, ExpenseShare, Role, SavedPlace, Trip, TripBundle, TripMember, User } from "@/types";
+import { toPublicBundle } from "@/lib/public-trip";
+import type { Activity, Booking, Comment, Day, Expense, ExpenseShare, Participant, PlaceVote, PublicTripBundle, Role, SavedPlace, Trip, TripBundle, TripInvite, TripMember, TripSnapshot, User } from "@/types";
 
 type Row = Record<string, unknown>;
 
@@ -35,6 +36,8 @@ function tripFrom(row: Row): Trip {
     travelerCount: Number(row.traveler_count ?? 1),
     centerLat: Number(row.center_lat),
     centerLng: Number(row.center_lng),
+    revision: Number(row.revision ?? 0),
+    fxRates: (row.fx_rates && typeof row.fx_rates === "object" ? row.fx_rates : {}) as Record<string, number>,
   };
 }
 
@@ -129,12 +132,17 @@ export function createSupabaseRepository(): Repository {
   async function uniqueSlug(base: string) {
     let slug = base || "trip";
     let n = 2;
-    while (true) {
-      const { data } = await supabase.from("trips").select("id").eq("slug", slug).maybeSingle();
-      if (!data) return slug;
+    while (n < 50) {
+      const { data, error } = await supabase.rpc("slug_available", { p_slug: slug });
+      if (!error && data === true) return slug;
+      if (error) {
+        const { data: row } = await supabase.from("trips").select("id").eq("slug", slug).maybeSingle();
+        if (!row) return slug;
+      }
       slug = `${base}-${n}`;
       n += 1;
     }
+    return `${base}-${nid("s")}`;
   }
 
   async function pushEvent(tripId: string, user: User, body: string) {
@@ -175,6 +183,8 @@ export function createSupabaseRepository(): Repository {
           attachmentUrl,
           attachmentName: row.attachment_name ? asString(row.attachment_name) : null,
           notes: asString(row.notes),
+          barcodeValue: row.barcode_value ? asString(row.barcode_value) : null,
+          barcodeType: asString(row.barcode_type || "qr") === "code128" ? "code128" : "qr",
         };
         return booking;
       }),
@@ -193,7 +203,13 @@ export function createSupabaseRepository(): Repository {
       }),
       days: ((days.data ?? []) as Row[]).map((row) => ({ id: asString(row.id), tripId: trip.id, date: asString(row.date).slice(0, 10), note: asString(row.note) })),
       activities: ((activities.data ?? []) as Row[]).map(activityFrom),
-      saved: ((saved.data ?? []) as Row[]).map((row) => ({ id: asString(row.id), tripId: trip.id, placeId: asString(row.place_id), note: asString(row.note) })),
+      saved: ((saved.data ?? []) as Row[]).map((row) => ({
+        id: asString(row.id),
+        tripId: trip.id,
+        placeId: asString(row.place_id),
+        note: asString(row.note),
+        priority: (asString(row.priority || "nice") as SavedPlace["priority"]) || "nice",
+      })),
       bookings: bookingRows,
       expenses: ((expenses.data ?? []) as Row[]).map((row) => ({
         id: asString(row.id),
@@ -204,6 +220,8 @@ export function createSupabaseRepository(): Repository {
         category: asString(row.category) as Expense["category"],
         paidBy: asString(row.paid_by),
         activityId: row.activity_id ? asString(row.activity_id) : null,
+        currency: asString(row.currency || trip.currency || "USD"),
+        participantId: row.participant_id ? asString(row.participant_id) : null,
       })),
       shares: ((shares.data ?? []) as Row[]).map((row) => ({
         id: asString(row.id),
@@ -211,6 +229,7 @@ export function createSupabaseRepository(): Repository {
         tripId: trip.id,
         userId: asString(row.user_id),
         amount: Number(row.amount),
+        participantId: row.participant_id ? asString(row.participant_id) : null,
       })),
       comments: ((comments.data ?? []) as Row[]).map((row) => ({
         id: asString(row.id),
@@ -228,7 +247,78 @@ export function createSupabaseRepository(): Repository {
         createdAt: asString(row.created_at),
       })),
       places: placesFor(trip.destinationId),
+      invites: [],
+      participants: [],
+      votes: [],
+      snapshots: [],
     };
+  }
+
+  async function loadExtras(bundle: TripBundle): Promise<TripBundle> {
+    const [invites, participants, votes, snapshots] = await Promise.all([
+      supabase.from("trip_invites").select("*").eq("trip_id", bundle.trip.id),
+      supabase.from("participants").select("*").eq("trip_id", bundle.trip.id),
+      supabase.from("place_votes").select("*").eq("trip_id", bundle.trip.id),
+      supabase.from("trip_snapshots").select("*").eq("trip_id", bundle.trip.id).order("created_at", { ascending: false }),
+    ]);
+    return {
+      ...bundle,
+      invites: ((invites.data ?? []) as Row[]).map(inviteFrom),
+      participants: ((participants.data ?? []) as Row[]).map((row) => ({
+        id: asString(row.id),
+        tripId: bundle.trip.id,
+        name: asString(row.name),
+        userId: row.user_id ? asString(row.user_id) : null,
+      })),
+      votes: ((votes.data ?? []) as Row[]).map((row) => ({
+        id: asString(row.id),
+        tripId: bundle.trip.id,
+        placeId: asString(row.place_id),
+        userId: asString(row.user_id),
+        vote: asString(row.vote) === "down" ? "down" : "up",
+      })),
+      snapshots: ((snapshots.data ?? []) as Row[]).map(snapshotFrom),
+    };
+  }
+
+  function inviteFrom(row: Row): TripInvite {
+    return {
+      id: asString(row.id),
+      tripId: asString(row.trip_id),
+      token: asString(row.token),
+      role: asString(row.role) === "editor" ? "editor" : "viewer",
+      createdBy: asString(row.created_by),
+      expiresAt: asString(row.expires_at),
+      maxUses: Number(row.max_uses ?? 20),
+      usedCount: Number(row.used_count ?? 0),
+    };
+  }
+
+  function snapshotFrom(row: Row): TripSnapshot {
+    const payload = (row.payload ?? {}) as { activities?: Activity[]; saved?: SavedPlace[] };
+    return {
+      id: asString(row.id),
+      tripId: asString(row.trip_id),
+      revision: Number(row.revision ?? 0),
+      label: asString(row.label),
+      createdAt: asString(row.created_at),
+      activities: payload.activities ?? [],
+      saved: payload.saved ?? [],
+    };
+  }
+
+  async function writeSnapshot(tripId: string, user: User, label: string) {
+    const bundle = await api.getBundle(tripId);
+    if (!bundle) return;
+    await supabase.from("trip_snapshots").insert({
+      id: nid("snap"),
+      trip_id: tripId,
+      revision: bundle.trip.revision,
+      label,
+      payload: { activities: bundle.activities, saved: bundle.saved },
+      created_at: new Date().toISOString(),
+    });
+    await pushEvent(tripId, user, label);
   }
 
   async function uploadAttachment(tripId: string, dataUrl: string, name: string) {
@@ -282,12 +372,23 @@ export function createSupabaseRepository(): Repository {
       const { data, error } = await supabase.from("trips").select("*").eq("id", tripId).maybeSingle();
       if (error) throw new RepoError(error.message);
       if (!data) return null;
-      return assemble(tripFrom(data as Row));
+      return loadExtras(await assemble(tripFrom(data as Row)));
     },
     async getPublicBundle(slug) {
-      const { data } = await supabase.from("trips").select("*").eq("slug", slug).eq("is_public", true).maybeSingle();
-      if (!data) return null;
-      return assemble(tripFrom(data as Row));
+      const { data, error } = await supabase.rpc("get_public_trip", { p_slug: slug });
+      if (error || !data) {
+        const { data: row } = await supabase.from("trips").select("*").eq("slug", slug).eq("is_public", true).maybeSingle();
+        if (!row) return null;
+        return toPublicBundle(await assemble(tripFrom(row as Row)));
+      }
+      const body = data as PublicTripBundle;
+      return {
+        trip: body.trip,
+        owner: body.owner,
+        days: (body.days ?? []).map((day) => ({ ...day, date: asString(day.date).slice(0, 10), note: "" })),
+        activities: body.activities ?? [],
+        places: placesFor(body.trip.destinationId),
+      };
     },
     async getBySlug(slug) {
       const { data } = await supabase.from("trips").select("*").eq("slug", slug).maybeSingle();
@@ -299,50 +400,30 @@ export function createSupabaseRepository(): Repository {
       const destination = destinationById(input.destinationId);
       if (!destination) throw new RepoError("Pick a destination we know.");
       if (input.endDate < input.startDate) throw new RepoError("The end date is before the start.");
-      const trip: Trip = {
-        id: nid("trip"),
-        ownerId: user.id,
-        title: input.title.trim() || destination.name,
-        destination: destination.name,
-        destinationId: destination.id,
-        startDate: input.startDate,
-        endDate: input.endDate,
-        coverImage: `https://picsum.photos/seed/${destination.id}-cover/1400/900`,
-        currency: input.currency || "USD",
-        timezone: destination.timezone,
-        slug: await uniqueSlug(`${slugify(destination.name)}-${input.startDate.slice(0, 4)}`),
-        isPublic: false,
-        budgetAmount: input.budgetAmount ?? 1500,
-        travelerCount: input.travelerCount,
-        centerLat: destination.lat,
-        centerLng: destination.lng,
-      };
-      const { error } = await supabase.from("trips").insert({
-        id: trip.id,
-        owner_id: trip.ownerId,
-        title: trip.title,
-        destination: trip.destination,
-        destination_id: trip.destinationId,
-        start_date: trip.startDate,
-        end_date: trip.endDate,
-        cover_image: trip.coverImage,
-        currency: trip.currency,
-        timezone: trip.timezone,
-        slug: trip.slug,
-        is_public: trip.isPublic,
-        budget_amount: trip.budgetAmount,
-        traveler_count: trip.travelerCount,
-        center_lat: trip.centerLat,
-        center_lng: trip.centerLng,
+      const draftId = nid("trip");
+      const days = buildDays(draftId, eachDate(input.startDate, input.endDate));
+      const slug = await uniqueSlug(`${slugify(destination.name)}-${input.startDate.slice(0, 4)}`);
+      const { data, error } = await supabase.rpc("create_trip", {
+        payload: {
+          id: draftId,
+          title: input.title.trim() || destination.name,
+          destination: destination.name,
+          destination_id: destination.id,
+          start_date: input.startDate,
+          end_date: input.endDate,
+          cover_image: `https://picsum.photos/seed/${destination.id}-cover/1400/900`,
+          currency: input.currency || "USD",
+          timezone: destination.timezone,
+          slug,
+          budget_amount: input.budgetAmount ?? 1500,
+          traveler_count: input.travelerCount,
+          center_lat: destination.lat,
+          center_lng: destination.lng,
+          days: days.map((day) => ({ id: day.id, date: day.date, note: day.note })),
+        },
       });
-      if (error) throw new RepoError(error.message);
-      const member: TripMember = { tripId: trip.id, userId: user.id, role: "owner" };
-      const { error: memberError } = await supabase.from("trip_members").insert({ trip_id: member.tripId, user_id: member.userId, role: member.role });
-      if (memberError) throw new RepoError(memberError.message);
-      const days = buildDays(trip.id, eachDate(trip.startDate, trip.endDate));
-      const { error: dayError } = await supabase.from("days").insert(days.map((day) => ({ id: day.id, trip_id: day.tripId, date: day.date, note: day.note })));
-      if (dayError) throw new RepoError(dayError.message);
-      return trip;
+      if (error || !data) throw new RepoError(error?.message || "Couldn't create the trip.");
+      return tripFrom(data as Row);
     },
     async updateTrip(tripId, patch) {
       const touchesSettings = patch.isPublic != null || patch.startDate != null || patch.endDate != null;
@@ -387,78 +468,89 @@ export function createSupabaseRepository(): Repository {
       const user = await requireUser();
       await ensureCatalog();
       const sample = buildTokyoSample(user, { stable: false, withCollaborators: false });
-      sample.trip.slug = await uniqueSlug(sample.trip.slug);
-      const { error } = await supabase.from("trips").insert({
-        id: sample.trip.id,
-        owner_id: user.id,
+      const created = await api.createTrip({
         title: sample.trip.title,
-        destination: sample.trip.destination,
-        destination_id: sample.trip.destinationId,
-        start_date: sample.trip.startDate,
-        end_date: sample.trip.endDate,
-        cover_image: sample.trip.coverImage,
+        destinationId: sample.trip.destinationId,
+        startDate: sample.trip.startDate,
+        endDate: sample.trip.endDate,
+        travelerCount: sample.trip.travelerCount,
+        budgetAmount: sample.trip.budgetAmount,
         currency: sample.trip.currency,
-        timezone: sample.trip.timezone,
-        slug: sample.trip.slug,
-        is_public: true,
-        budget_amount: sample.trip.budgetAmount,
-        traveler_count: sample.trip.travelerCount,
-        center_lat: sample.trip.centerLat,
-        center_lng: sample.trip.centerLng,
       });
-      if (error) throw new RepoError(error.message);
-      await supabase.from("trip_members").insert({ trip_id: sample.trip.id, user_id: user.id, role: "owner" });
-      await supabase.from("days").insert(sample.days.map((day) => ({ id: day.id, trip_id: sample.trip.id, date: day.date, note: day.note })));
+      await supabase.from("trips").update({ is_public: true, cover_image: sample.trip.coverImage }).eq("id", created.id);
+      const createdBundle = await api.getBundle(created.id);
+      const dayMap = new Map((createdBundle?.days ?? []).map((day, index) => [sample.days[index]?.id, day.id]));
+      sample.trip = { ...sample.trip, id: created.id, slug: created.slug, ownerId: user.id };
+      sample.activities = sample.activities.map((activity) => ({ ...activity, id: nid("act"), tripId: created.id, dayId: dayMap.get(activity.dayId) ?? activity.dayId }));
+      sample.saved = sample.saved.map((item) => ({ ...item, id: nid("save"), tripId: created.id }));
+      sample.bookings = sample.bookings.map((item) => ({ ...item, id: nid("book"), tripId: created.id }));
+      sample.days = createdBundle?.days ?? sample.days;
       await supabase.from("activities").insert(sample.activities.map(activityTo));
-      await supabase.from("saved_places").insert(sample.saved.map((item) => ({ id: item.id, trip_id: sample.trip.id, place_id: item.placeId, note: item.note })));
+      await supabase.from("saved_places").insert(sample.saved.map((item) => ({ id: item.id, trip_id: created.id, place_id: item.placeId, note: item.note, priority: item.priority })));
       await supabase.from("bookings").insert(sample.bookings.map((item) => ({
-        id: item.id, trip_id: sample.trip.id, type: item.type, title: item.title, reference: item.reference, start_at: item.startAt, notes: item.notes, attachment_url: null, attachment_name: null,
+        id: item.id, trip_id: created.id, type: item.type, title: item.title, reference: item.reference, start_at: item.startAt, notes: item.notes, attachment_url: null, attachment_name: null, barcode_value: item.barcodeValue, barcode_type: item.barcodeType,
       })));
       if (sample.expenses.length) {
         await supabase.from("expenses").insert(sample.expenses.map((item) => ({
-          id: item.id, trip_id: sample.trip.id, title: item.title, amount: item.amount, planned_amount: item.plannedAmount, category: item.category, paid_by: item.paidBy, activity_id: item.activityId,
+          id: item.id, trip_id: created.id, title: item.title, amount: item.amount, planned_amount: item.plannedAmount, category: item.category, paid_by: user.id, activity_id: null, currency: item.currency, participant_id: null,
         })));
       }
-      return sample.trip;
+      return created;
     },
     async joinTrip(slug) {
       const user = await requireUser();
-      const trip = await api.getBySlug(slug);
-      if (!trip) throw new RepoError("That invite link doesn't match a trip.");
-      const role = await roleOf(trip.id, user.id);
-      if (!role) {
-        const { error } = await supabase.from("trip_members").insert({ trip_id: trip.id, user_id: user.id, role: "viewer" });
-        if (error) throw new RepoError(error.message);
+      const accepted = await supabase.rpc("accept_trip_invite", { p_token: slug });
+      if (!accepted.error && accepted.data) {
+        const trip = tripFrom(accepted.data as Row);
         await pushEvent(trip.id, user, `${user.name} joined the trip.`);
+        return trip;
       }
-      return trip;
+      if (accepted.error && !/invite not found/i.test(accepted.error.message)) throw new RepoError(accepted.error.message);
+      const pub = await api.getPublicBundle(slug);
+      if (!pub) throw new RepoError("That invite link doesn't match a trip.");
+      const { error } = await supabase.from("trip_members").insert({ trip_id: pub.trip.id, user_id: user.id, role: "viewer" });
+      if (error && !/duplicate|already/i.test(error.message)) throw new RepoError(error.message);
+      const { data } = await supabase.from("trips").select("*").eq("id", pub.trip.id).maybeSingle();
+      if (!data) throw new RepoError("That invite link doesn't match a trip.");
+      return tripFrom(data as Row);
     },
     async duplicateTrip(slug) {
-      const user = await requireUser();
+      await requireUser();
       const source = await api.getPublicBundle(slug);
       const owned = source ? null : await api.getBySlug(slug);
-      const bundle = source ?? (owned ? await api.getBundle(owned.id) : null);
-      if (!bundle) throw new RepoError("That public trip isn't available.");
+      const full = owned ? await api.getBundle(owned.id) : null;
+      const trip = source?.trip ?? full?.trip;
+      if (!trip) throw new RepoError("That public trip isn't available.");
       const copy = await api.createTrip({
-        title: `${bundle.trip.title} copy`,
-        destinationId: bundle.trip.destinationId,
-        startDate: bundle.trip.startDate,
-        endDate: bundle.trip.endDate,
-        travelerCount: bundle.trip.travelerCount,
-        budgetAmount: bundle.trip.budgetAmount,
-        currency: bundle.trip.currency,
+        title: `${trip.title} copy`,
+        destinationId: trip.destinationId,
+        startDate: trip.startDate,
+        endDate: trip.endDate,
+        travelerCount: full?.trip.travelerCount ?? 1,
+        budgetAmount: full?.trip.budgetAmount ?? 1500,
+        currency: full?.trip.currency,
       });
       const created = await api.getBundle(copy.id);
       if (!created) return copy;
-      const dayMap = new Map(bundle.days.map((day, index) => [day.id, created.days[index]?.id]));
-      const activities = bundle.activities.map((activity) => ({
-        ...activity,
+      const sourceDays = source?.days ?? full?.days ?? [];
+      const sourceActivities = source?.activities ?? full?.activities ?? [];
+      const dayMap = new Map(sourceDays.map((day, index) => [day.id, created.days[index]?.id]));
+      const activities: Activity[] = sourceActivities.map((activity, index) => ({
         id: nid("act"),
         tripId: copy.id,
         dayId: dayMap.get(activity.dayId) ?? created.days[0]?.id ?? activity.dayId,
+        placeId: activity.placeId,
+        title: activity.title,
+        startTime: activity.startTime,
+        duration: activity.duration,
+        position: activity.position ?? index,
+        note: "note" in activity && typeof activity.note === "string" ? activity.note : "",
+        plannedCost: "plannedCost" in activity && typeof activity.plannedCost === "number" ? activity.plannedCost : 0,
+        actualCost: "actualCost" in activity && typeof activity.actualCost === "number" ? activity.actualCost : null,
+        status: "status" in activity && (activity.status === "planned" || activity.status === "done" || activity.status === "skipped") ? activity.status : "planned",
       }));
-      await api.commitActivities(copy.id, activities);
-      for (const item of bundle.saved) await api.savePlace(copy.id, item.placeId);
+      await api.commitActivities(copy.id, activities, "Duplicated the itinerary.");
+      for (const item of full?.saved ?? []) await api.savePlace(copy.id, item.placeId);
       return copy;
     },
     async moveActivity(tripId, activeId, overId) {
@@ -475,7 +567,7 @@ export function createSupabaseRepository(): Repository {
       if (after && before.dayId !== after.dayId) {
         const { data: days } = await supabase.from("days").select("*").eq("trip_id", tripId);
         const mapped: Day[] = ((days ?? []) as Row[]).map((row) => ({ id: asString(row.id), tripId, date: asString(row.date), note: "" }));
-        await pushEvent(tripId, user, `${user.name} moved "${before.title}" to ${dayLabel(mapped, after.dayId)}.`);
+        await writeSnapshot(tripId, user, `${user.name} moved "${before.title}" to ${dayLabel(mapped, after.dayId)}.`);
       }
     },
     async createActivity(tripId, input: ActivityInput) {
@@ -525,13 +617,13 @@ export function createSupabaseRepository(): Repository {
       const keep = new Set(activities.map((activity) => activity.id));
       const remove = ((data ?? []) as { id: string }[]).map((row) => row.id).filter((id) => !keep.has(id));
       if (remove.length) await supabase.from("activities").delete().in("id", remove);
-      if (eventBody) await pushEvent(tripId, user, eventBody);
+      await writeSnapshot(tripId, user, eventBody || `${user.name} updated the itinerary.`);
     },
     async savePlace(tripId, placeId) {
       await assertEdit(tripId);
       if (!placeById(placeId)) throw new RepoError("Unknown place.");
-      const saved: SavedPlace = { id: nid("save"), tripId, placeId, note: "" };
-      const { error } = await supabase.from("saved_places").insert({ id: saved.id, trip_id: tripId, place_id: placeId, note: "" });
+      const saved: SavedPlace = { id: nid("save"), tripId, placeId, note: "", priority: "nice" };
+      const { error } = await supabase.from("saved_places").insert({ id: saved.id, trip_id: tripId, place_id: placeId, note: "", priority: "nice" });
       if (error && !error.message.toLowerCase().includes("duplicate")) throw new RepoError(error.message);
       return saved;
     },
@@ -553,6 +645,8 @@ export function createSupabaseRepository(): Repository {
         notes: input.notes ?? "",
         attachmentUrl,
         attachmentName: input.attachmentName ?? null,
+        barcodeValue: input.barcodeValue ?? null,
+        barcodeType: input.barcodeType ?? "qr",
       };
       const { error } = await supabase.from("bookings").insert({
         id: booking.id,
@@ -564,6 +658,8 @@ export function createSupabaseRepository(): Repository {
         notes: booking.notes,
         attachment_url: booking.attachmentUrl,
         attachment_name: booking.attachmentName,
+        barcode_value: booking.barcodeValue,
+        barcode_type: booking.barcodeType,
       });
       if (error) throw new RepoError(error.message);
       return booking;
@@ -583,6 +679,8 @@ export function createSupabaseRepository(): Repository {
         category: input.category,
         paidBy: input.paidBy,
         activityId: input.activityId ?? null,
+        currency: input.currency || "USD",
+        participantId: input.participantId ?? null,
       };
       const { error } = await supabase.from("expenses").insert({
         id: expense.id,
@@ -593,11 +691,13 @@ export function createSupabaseRepository(): Repository {
         category: expense.category,
         paid_by: expense.paidBy,
         activity_id: expense.activityId,
+        currency: expense.currency,
+        participant_id: expense.participantId,
       });
       if (error) throw new RepoError(error.message);
       if (input.shares.length) {
         await supabase.from("expense_shares").insert(
-          input.shares.map((share) => ({ id: nid("share"), expense_id: expense.id, trip_id: tripId, user_id: share.userId, amount: share.amount })),
+          input.shares.map((share) => ({ id: nid("share"), expense_id: expense.id, trip_id: tripId, user_id: share.userId, amount: share.amount, participant_id: share.participantId ?? null })),
         );
       }
       return expense;
@@ -625,6 +725,86 @@ export function createSupabaseRepository(): Repository {
       await assertOwner(tripId);
       if (role === "owner") throw new RepoError("The owner role stays put.");
       const { error } = await supabase.from("trip_members").update({ role }).eq("trip_id", tripId).eq("user_id", userId).neq("role", "owner");
+      if (error) throw new RepoError(error.message);
+    },
+    async createInvite(tripId, role) {
+      await assertEdit(tripId);
+      const { data, error } = await supabase.rpc("create_trip_invite", { p_trip_id: tripId, p_role: role });
+      if (error || !data) throw new RepoError(error?.message || "Couldn't create an invite.");
+      return inviteFrom(data as Row);
+    },
+    async moveSavedPlaceToDay(tripId, placeId, dayId) {
+      await assertEdit(tripId);
+      const place = placeById(placeId);
+      if (!place) throw new RepoError("Unknown place.");
+      const { data } = await supabase.from("activities").select("position").eq("day_id", dayId);
+      const position = (data ?? []).reduce((max, row) => Math.max(max, Number(row.position)), -1) + 1;
+      const activity: Activity = {
+        id: nid("act"), tripId, dayId, placeId, title: place.name, startTime: "10:00", duration: place.durationMin, position, note: "", plannedCost: 0, actualCost: null, status: "planned",
+      };
+      const { error } = await supabase.rpc("move_saved_place_to_day", {
+        payload: { id: activity.id, trip_id: tripId, place_id: placeId, day_id: dayId, title: activity.title, start_time: activity.startTime, duration: activity.duration, position },
+      });
+      if (error) throw new RepoError(error.message);
+      return activity;
+    },
+    async moveActivityToIdeas(tripId, activityId) {
+      await assertEdit(tripId);
+      const { error } = await supabase.rpc("move_activity_to_ideas", { p_trip_id: tripId, p_activity_id: activityId });
+      if (error) throw new RepoError(error.message);
+    },
+    async listSnapshots(tripId) {
+      const { data, error } = await supabase.from("trip_snapshots").select("*").eq("trip_id", tripId).order("created_at", { ascending: false });
+      if (error) throw new RepoError(error.message);
+      return ((data ?? []) as Row[]).map(snapshotFrom);
+    },
+    async restoreSnapshot(tripId, snapshotId) {
+      const user = await assertEdit(tripId);
+      const { data, error } = await supabase.from("trip_snapshots").select("*").eq("id", snapshotId).eq("trip_id", tripId).maybeSingle();
+      if (error || !data) throw new RepoError("That version is gone.");
+      const snap = snapshotFrom(data as Row);
+      await api.commitActivities(tripId, snap.activities, `${user.name} restored a previous version.`);
+      await supabase.from("saved_places").delete().eq("trip_id", tripId);
+      if (snap.saved.length) {
+        await supabase.from("saved_places").insert(snap.saved.map((item) => ({ id: item.id, trip_id: tripId, place_id: item.placeId, note: item.note, priority: item.priority })));
+      }
+    },
+    async votePlace(tripId, placeId, vote) {
+      const user = await requireUser();
+      const { data } = await supabase.from("place_votes").select("*").eq("trip_id", tripId).eq("place_id", placeId).eq("user_id", user.id).maybeSingle();
+      if (data && asString((data as Row).vote) === vote) {
+        await supabase.from("place_votes").delete().eq("id", asString((data as Row).id));
+        return;
+      }
+      if (data) {
+        await supabase.from("place_votes").update({ vote }).eq("id", asString((data as Row).id));
+        return;
+      }
+      const { error } = await supabase.from("place_votes").insert({ id: nid("vote"), trip_id: tripId, place_id: placeId, user_id: user.id, vote });
+      if (error) throw new RepoError(error.message);
+    },
+    async setPlacePriority(tripId, placeId, priority) {
+      await assertEdit(tripId);
+      const { error } = await supabase.from("saved_places").update({ priority }).eq("trip_id", tripId).eq("place_id", placeId);
+      if (error) throw new RepoError(error.message);
+    },
+    async addParticipant(tripId, name) {
+      await assertEdit(tripId);
+      const participant: Participant = { id: nid("part"), tripId, name: name.trim() || "Traveler", userId: null };
+      const { error } = await supabase.from("participants").insert({ id: participant.id, trip_id: tripId, name: participant.name, user_id: null });
+      if (error) throw new RepoError(error.message);
+      return participant;
+    },
+    async removeParticipant(tripId, participantId) {
+      await assertEdit(tripId);
+      await supabase.from("participants").delete().eq("id", participantId).eq("trip_id", tripId);
+    },
+    async setFxRate(tripId, currency, rate) {
+      await assertEdit(tripId);
+      const current = await api.getBundle(tripId);
+      if (!current) throw new RepoError("Trip not found.");
+      const fxRates = { ...current.trip.fxRates, [currency]: rate };
+      const { error } = await supabase.from("trips").update({ fx_rates: fxRates }).eq("id", tripId);
       if (error) throw new RepoError(error.message);
     },
     async search(query) {

@@ -6,11 +6,17 @@ import type {
   Expense,
   ExpenseCategory,
   ExpenseShare,
+  Participant,
+  PlacePriority,
+  PlaceVoteValue,
+  PublicTripBundle,
   Role,
   SavedPlace,
   SearchResults,
   Trip,
   TripBundle,
+  TripInvite,
+  TripSnapshot,
   User,
 } from "@/types";
 
@@ -50,6 +56,8 @@ export type BookingInput = {
   notes?: string;
   attachmentUrl?: string | null;
   attachmentName?: string | null;
+  barcodeValue?: string | null;
+  barcodeType?: Booking["barcodeType"];
 };
 
 export type ExpenseInput = {
@@ -58,8 +66,10 @@ export type ExpenseInput = {
   plannedAmount: number;
   category: ExpenseCategory;
   paidBy: string;
-  shares: { userId: string; amount: number }[];
+  shares: { userId: string; amount: number; participantId?: string | null }[];
   activityId?: string | null;
+  currency?: string;
+  participantId?: string | null;
 };
 
 export interface Repository {
@@ -70,7 +80,7 @@ export interface Repository {
   currentUser(): Promise<User | null>;
   listTrips(): Promise<Trip[]>;
   getBundle(tripId: string): Promise<TripBundle | null>;
-  getPublicBundle(slug: string): Promise<TripBundle | null>;
+  getPublicBundle(slug: string): Promise<PublicTripBundle | null>;
   getBySlug(slug: string): Promise<Trip | null>;
   createTrip(input: TripInput): Promise<Trip>;
   updateTrip(tripId: string, patch: Partial<Pick<Trip, "title" | "budgetAmount" | "currency" | "travelerCount" | "isPublic" | "startDate" | "endDate" | "coverImage">>): Promise<Trip>;
@@ -93,6 +103,16 @@ export interface Repository {
   setMemberRole(tripId: string, userId: string, role: Role): Promise<void>;
   search(query: string): Promise<SearchResults>;
   listEvents(tripId: string): Promise<ActivityEvent[]>;
+  createInvite(tripId: string, role: Exclude<Role, "owner">): Promise<TripInvite>;
+  moveSavedPlaceToDay(tripId: string, placeId: string, dayId: string): Promise<Activity>;
+  moveActivityToIdeas(tripId: string, activityId: string): Promise<void>;
+  listSnapshots(tripId: string): Promise<TripSnapshot[]>;
+  restoreSnapshot(tripId: string, snapshotId: string): Promise<void>;
+  votePlace(tripId: string, placeId: string, vote: PlaceVoteValue): Promise<void>;
+  setPlacePriority(tripId: string, placeId: string, priority: PlacePriority): Promise<void>;
+  addParticipant(tripId: string, name: string): Promise<Participant>;
+  removeParticipant(tripId: string, participantId: string): Promise<void>;
+  setFxRate(tripId: string, currency: string, rate: number): Promise<void>;
 }
 
 export type { ExpenseShare };

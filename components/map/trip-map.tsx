@@ -17,6 +17,13 @@ export type MapMarker = {
   color: string;
   title: string;
   dim?: boolean;
+  kind?: "scheduled" | "suggested" | "selected" | "cluster";
+  weight?: number;
+};
+
+export type MapSegment = {
+  coordinates: [number, number][];
+  mode: string;
 };
 
 export type MapRoute = {
@@ -24,6 +31,7 @@ export type MapRoute = {
   color: string;
   coordinates: [number, number][];
   active: boolean;
+  segments?: MapSegment[];
 };
 
 type Props = {
@@ -36,6 +44,7 @@ type Props = {
   className?: string;
   onMarkerClick?: (placeId: string) => void;
   onMarkerHover?: (placeId: string | null) => void;
+  onZoom?: (zoom: number) => void;
 };
 
 export function TripMap({
@@ -48,6 +57,7 @@ export function TripMap({
   className,
   onMarkerClick,
   onMarkerHover,
+  onZoom,
 }: Props) {
   const { resolvedTheme } = useTheme();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -61,8 +71,10 @@ export function TripMap({
   const [mapEpoch, setMapEpoch] = useState(0);
   const theme = resolvedTheme === "dark" ? "dark" : "light";
 
-  clickRef.current = onMarkerClick;
-  hoverRef.current = onMarkerHover;
+  useEffect(() => {
+    clickRef.current = onMarkerClick;
+    hoverRef.current = onMarkerHover;
+  }, [onMarkerClick, onMarkerHover]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -90,6 +102,7 @@ export function TripMap({
           if (!map) return;
           const center = map.getCenter();
           cameraRef.current = { center: [center.lng, center.lat], zoom: map.getZoom() };
+          onZoom?.(map.getZoom());
         });
         observer = new ResizeObserver(() => map?.resize());
         observer.observe(container);
@@ -115,20 +128,26 @@ export function TripMap({
     let frame = 0;
     const draw = () => {
       if (!map.isStyleLoaded()) return;
-      const live = new Set(routes.map((route) => route.id));
+      const live = routes.map((route) => route.id);
       const style = map.getStyle();
       for (const layer of style.layers ?? []) {
-        if (layer.id.startsWith("route-") && !live.has(layer.id.slice(6))) {
+        if (!layer.id.startsWith("route-")) continue;
+        const id = layer.id.slice(6);
+        const keep = live.some((routeId) => id === routeId || id.startsWith(`${routeId}--`));
+        if (!keep) {
           if (map.getLayer(layer.id)) map.removeLayer(layer.id);
           if (map.getSource(layer.id)) map.removeSource(layer.id);
         }
       }
-      for (const route of routes) animateRoute(map, route);
+      for (const route of routes) {
+        if (route.segments?.length) route.segments.forEach((segment, index) => animateRoute(map, { ...route, id: `${route.id}--${index}`, coordinates: segment.coordinates, segments: undefined }, segment.mode));
+        else animateRoute(map, route, "transit");
+      }
     };
     if (map.isStyleLoaded()) draw();
     else map.once("load", draw);
     return () => cancelAnimationFrame(frame);
-    function animateRoute(mapInstance: MapLibre, route: MapRoute) {
+    function animateRoute(mapInstance: MapLibre, route: MapRoute, mode = "transit") {
       const sourceId = `route-${route.id}`;
       const coords = route.coordinates;
       const paint = () => ({
@@ -142,7 +161,13 @@ export function TripMap({
         if (source) source.setData(data);
         else if (shown.length) {
           mapInstance.addSource(sourceId, { type: "geojson", data });
-          mapInstance.addLayer({ id: sourceId, type: "line", source: sourceId, layout: { "line-cap": "round", "line-join": "round" }, paint: paint() });
+          mapInstance.addLayer({
+            id: sourceId,
+            type: "line",
+            source: sourceId,
+            layout: { "line-cap": "round", "line-join": "round" },
+            paint: { ...paint(), "line-dasharray": mode === "walk" || mode === "estimate" ? [1.2, 1.4] : [1, 0] },
+          });
         }
         if (mapInstance.getLayer(sourceId)) mapInstance.setPaintProperty(sourceId, "line-color", route.color);
       };
@@ -186,10 +211,16 @@ export function TripMap({
         element.dataset.testid = `marker-${item.placeId}`;
         element.dataset.label = item.title;
         element.style.setProperty("--c", item.color);
-        element.textContent = String(item.number);
         const hot = highlightId === item.placeId || highlightId === item.id;
+        element.textContent = item.kind === "suggested" ? (hot ? "★" : "") : String(item.number || "");
         element.classList.toggle("is-hot", hot);
         element.classList.toggle("is-dim", Boolean(item.dim) && !hot);
+        element.classList.toggle("is-suggested", item.kind === "suggested");
+        element.classList.toggle("is-selected", item.kind === "selected" || (hot && item.kind === "suggested"));
+        element.classList.toggle("is-cluster", item.kind === "cluster");
+        const size = 30 + Math.min(14, (item.weight ?? 0) * 4);
+        element.style.width = `${item.kind === "cluster" ? 40 : size}px`;
+        element.style.height = `${item.kind === "cluster" ? 40 : size}px`;
         marker.setLngLat([item.lng, item.lat]);
       }
       for (const [id, marker] of markersRef.current) {

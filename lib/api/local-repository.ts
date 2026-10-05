@@ -1,10 +1,13 @@
+import { moveActivityToIdeas, moveSavedPlaceToDay } from "@/lib/board";
 import { destinationById, placeById, places, placesFor } from "@/lib/catalog";
 import { eachDate } from "@/lib/dates";
+import { resolveJoin } from "@/lib/invites";
 import { buildDays, dayLabel, moveActivity } from "@/lib/itinerary";
+import { toPublicBundle } from "@/lib/public-trip";
 import { RepoError, type ActivityInput, type BookingInput, type ExpenseInput, type Repository, type TripInput } from "@/lib/api/repository";
 import { buildTokyoSample, demoUsers, type StoredUser } from "@/lib/sample-trip";
 import { nid, slugify } from "@/lib/utils";
-import type { Activity, ActivityEvent, Booking, Comment, Day, Expense, ExpenseShare, Role, SavedPlace, Trip, TripBundle, TripMember, User } from "@/types";
+import type { Activity, ActivityEvent, Booking, Comment, Day, Expense, ExpenseShare, Participant, PlaceVote, Role, SavedPlace, Trip, TripBundle, TripInvite, TripMember, TripSnapshot, User } from "@/types";
 
 const KEY = "tripcanvas.db.v1";
 
@@ -21,6 +24,10 @@ type Database = {
   shares: ExpenseShare[];
   comments: Comment[];
   events: ActivityEvent[];
+  invites: TripInvite[];
+  snapshots: TripSnapshot[];
+  votes: PlaceVote[];
+  participants: Participant[];
 };
 
 function strip(user: StoredUser): User {
@@ -43,6 +50,25 @@ function initial(): Database {
     shares: sample.shares,
     comments: sample.comments,
     events: sample.events,
+    invites: [],
+    snapshots: [],
+    votes: [],
+    participants: [],
+  };
+}
+
+function hydrate(parsed: Database): Database {
+  return {
+    ...parsed,
+    invites: parsed.invites ?? [],
+    snapshots: parsed.snapshots ?? [],
+    votes: parsed.votes ?? [],
+    participants: parsed.participants ?? [],
+    trips: parsed.trips.map((trip) => ({ ...trip, revision: trip.revision ?? 0, fxRates: trip.fxRates ?? {} })),
+    saved: parsed.saved.map((item) => ({ ...item, priority: item.priority ?? "nice" })),
+    bookings: parsed.bookings.map((item) => ({ ...item, barcodeValue: item.barcodeValue ?? null, barcodeType: item.barcodeType ?? "qr" })),
+    expenses: parsed.expenses.map((item) => ({ ...item, currency: item.currency ?? "USD", participantId: item.participantId ?? null })),
+    shares: parsed.shares.map((item) => ({ ...item, participantId: item.participantId ?? null })),
   };
 }
 
@@ -56,7 +82,7 @@ export function createLocalRepository(): Repository {
       if (!raw) return initial();
       const parsed = JSON.parse(raw) as Database;
       if (!parsed.users || !parsed.trips || !parsed.activities) return initial();
-      return parsed;
+      return hydrate(parsed);
     } catch {
       return initial();
     }
@@ -113,7 +139,31 @@ export function createLocalRepository(): Repository {
       comments: db.comments.filter((item) => item.tripId === trip.id),
       events: db.events.filter((item) => item.tripId === trip.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
       places: placesFor(trip.destinationId),
+      invites: db.invites.filter((item) => item.tripId === trip.id),
+      participants: db.participants.filter((item) => item.tripId === trip.id),
+      votes: db.votes.filter((item) => item.tripId === trip.id),
+      snapshots: db.snapshots.filter((item) => item.tripId === trip.id),
     };
+  }
+
+  function bump(tripId: string) {
+    const trip = db.trips.find((item) => item.id === tripId);
+    if (trip) trip.revision += 1;
+  }
+
+  function snapshot(tripId: string, user: User, label: string) {
+    bump(tripId);
+    const trip = db.trips.find((item) => item.id === tripId);
+    db.snapshots.unshift({
+      id: nid("snap"),
+      tripId,
+      revision: trip?.revision ?? 0,
+      label,
+      createdAt: new Date().toISOString(),
+      activities: db.activities.filter((item) => item.tripId === tripId).map((item) => ({ ...item })),
+      saved: db.saved.filter((item) => item.tripId === tripId).map((item) => ({ ...item })),
+    });
+    pushEvent(tripId, user, label);
   }
 
   function uniqueSlug(base: string) {
@@ -171,14 +221,13 @@ export function createLocalRepository(): Repository {
       const trip = db.trips.find((item) => item.id === tripId);
       if (!trip) return null;
       const userId = db.sessionUserId;
-      const member = roleOf(tripId, userId);
-      if (!member && !trip.isPublic) return null;
+      if (!roleOf(tripId, userId)) return null;
       return assemble(trip);
     },
     async getPublicBundle(slug) {
       db = read();
       const trip = db.trips.find((item) => item.slug === slug && item.isPublic);
-      return trip ? assemble(trip) : null;
+      return trip ? toPublicBundle(assemble(trip)) : null;
     },
     async getBySlug(slug) {
       db = read();
@@ -207,6 +256,8 @@ export function createLocalRepository(): Repository {
         travelerCount: input.travelerCount,
         centerLat: destination.lat,
         centerLng: destination.lng,
+        revision: 0,
+        fxRates: {},
       };
       db.trips.push(trip);
       db.members.push({ tripId: trip.id, userId: user.id, role: "owner" });
@@ -250,6 +301,10 @@ export function createLocalRepository(): Repository {
       db.shares = db.shares.filter((item) => item.tripId !== tripId);
       db.comments = db.comments.filter((item) => item.tripId !== tripId);
       db.events = db.events.filter((item) => item.tripId !== tripId);
+      db.invites = db.invites.filter((item) => item.tripId !== tripId);
+      db.snapshots = db.snapshots.filter((item) => item.tripId !== tripId);
+      db.votes = db.votes.filter((item) => item.tripId !== tripId);
+      db.participants = db.participants.filter((item) => item.tripId !== tripId);
       save();
     },
     async loadTokyoSample() {
@@ -269,10 +324,23 @@ export function createLocalRepository(): Repository {
     },
     async joinTrip(slug) {
       const user = requireUser();
-      const trip = db.trips.find((item) => item.slug === slug);
+      const result = resolveJoin({
+        tokenOrSlug: slug,
+        userId: user.id,
+        now: new Date().toISOString(),
+        invites: db.invites,
+        trips: db.trips,
+        members: db.members,
+      });
+      if (!result.ok) throw new RepoError(result.reason);
+      const trip = db.trips.find((item) => item.id === result.tripId);
       if (!trip) throw new RepoError("That invite link doesn't match a trip.");
-      if (!db.members.some((member) => member.tripId === trip.id && member.userId === user.id)) {
-        db.members.push({ tripId: trip.id, userId: user.id, role: "viewer" });
+      if (result.role !== "existing") {
+        db.members.push({ tripId: trip.id, userId: user.id, role: result.role });
+        if (result.inviteToken) {
+          const invite = db.invites.find((item) => item.token === result.inviteToken);
+          if (invite) invite.usedCount += 1;
+        }
         pushEvent(trip.id, user, `${user.name} joined the trip.`);
         save();
       }
@@ -319,8 +387,8 @@ export function createLocalRepository(): Repository {
       const after = next.find((activity) => activity.id === activeId);
       db.activities = next;
       if (after && before.dayId !== after.dayId) {
-        pushEvent(tripId, user, `${user.name} moved "${before.title}" to ${dayLabel(db.days, after.dayId)}.`);
-      }
+        snapshot(tripId, user, `${user.name} moved "${before.title}" to ${dayLabel(db.days, after.dayId)}.`);
+      } else bump(tripId);
       save();
     },
     async createActivity(tripId, input: ActivityInput) {
@@ -362,7 +430,7 @@ export function createLocalRepository(): Repository {
       const user = assertEdit(tripId);
       if (activities.some((activity) => activity.tripId !== tripId)) throw new RepoError("Invalid activity.");
       db.activities = [...db.activities.filter((activity) => activity.tripId !== tripId), ...activities];
-      if (eventBody) pushEvent(tripId, user, eventBody);
+      snapshot(tripId, user, eventBody || `${user.name} updated the itinerary.`);
       save();
     },
     async savePlace(tripId, placeId) {
@@ -370,7 +438,7 @@ export function createLocalRepository(): Repository {
       if (!placeById(placeId)) throw new RepoError("Unknown place.");
       const existing = db.saved.find((item) => item.tripId === tripId && item.placeId === placeId);
       if (existing) return existing;
-      const saved: SavedPlace = { id: nid("save"), tripId, placeId, note: "" };
+      const saved: SavedPlace = { id: nid("save"), tripId, placeId, note: "", priority: "nice" };
       db.saved.push(saved);
       save();
       return saved;
@@ -392,6 +460,8 @@ export function createLocalRepository(): Repository {
         notes: input.notes ?? "",
         attachmentUrl: input.attachmentUrl ?? null,
         attachmentName: input.attachmentName ?? null,
+        barcodeValue: input.barcodeValue ?? null,
+        barcodeType: input.barcodeType ?? "qr",
       };
       db.bookings.push(booking);
       save();
@@ -413,10 +483,12 @@ export function createLocalRepository(): Repository {
         category: input.category,
         paidBy: input.paidBy,
         activityId: input.activityId ?? null,
+        currency: input.currency || "USD",
+        participantId: input.participantId ?? input.paidBy,
       };
       db.expenses.push(expense);
       input.shares.forEach((share) => {
-        db.shares.push({ id: nid("share"), expenseId: expense.id, tripId, userId: share.userId, amount: share.amount });
+        db.shares.push({ id: nid("share"), expenseId: expense.id, tripId, userId: share.userId, amount: share.amount, participantId: share.participantId ?? share.userId });
       });
       save();
       return expense;
@@ -442,6 +514,106 @@ export function createLocalRepository(): Repository {
       if (!member) throw new RepoError("That person isn't on this trip.");
       if (member.role === "owner" || role === "owner") throw new RepoError("The owner role stays put.");
       member.role = role;
+      save();
+    },
+    async createInvite(tripId, role) {
+      const user = assertEdit(tripId);
+      const invite: TripInvite = {
+        id: nid("inv"),
+        tripId,
+        token: nid("tok").replace(/^tok_/, ""),
+        role,
+        createdBy: user.id,
+        expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
+        maxUses: 20,
+        usedCount: 0,
+      };
+      db.invites.push(invite);
+      save();
+      return invite;
+    },
+    async moveSavedPlaceToDay(tripId, placeId, dayId) {
+      assertEdit(tripId);
+      const place = placeById(placeId);
+      if (!place) throw new RepoError("Unknown place.");
+      const siblings = db.activities.filter((activity) => activity.dayId === dayId);
+      const activity: Activity = {
+        id: nid("act"),
+        tripId,
+        dayId,
+        placeId,
+        title: place.name,
+        startTime: "10:00",
+        duration: place.durationMin,
+        position: siblings.length ? Math.max(...siblings.map((item) => item.position)) + 1 : 0,
+        note: "",
+        plannedCost: 0,
+        actualCost: null,
+        status: "planned",
+      };
+      const next = moveSavedPlaceToDay({ activities: db.activities, saved: db.saved, tripId, placeId, activity });
+      if (!next) throw new RepoError("That place is not in Ideas.");
+      db.activities = next.activities;
+      db.saved = next.saved;
+      bump(tripId);
+      save();
+      return activity;
+    },
+    async moveActivityToIdeas(tripId, activityId) {
+      assertEdit(tripId);
+      const next = moveActivityToIdeas({ activities: db.activities, saved: db.saved, tripId, activityId, savedId: nid("save") });
+      if (!next) throw new RepoError("Activity not found.");
+      db.activities = next.activities;
+      db.saved = next.saved;
+      bump(tripId);
+      save();
+    },
+    async listSnapshots(tripId) {
+      db = read();
+      return db.snapshots.filter((item) => item.tripId === tripId);
+    },
+    async restoreSnapshot(tripId, snapshotId) {
+      const user = assertEdit(tripId);
+      const snap = db.snapshots.find((item) => item.id === snapshotId && item.tripId === tripId);
+      if (!snap) throw new RepoError("That version is gone.");
+      db.activities = [...db.activities.filter((item) => item.tripId !== tripId), ...snap.activities.map((item) => ({ ...item }))];
+      db.saved = [...db.saved.filter((item) => item.tripId !== tripId), ...snap.saved.map((item) => ({ ...item }))];
+      snapshot(tripId, user, `${user.name} restored a previous version.`);
+      save();
+    },
+    async votePlace(tripId, placeId, vote) {
+      const user = requireUser();
+      if (!roleOf(tripId, user.id)) throw new RepoError("You need to be on this trip.");
+      const existing = db.votes.find((item) => item.tripId === tripId && item.placeId === placeId && item.userId === user.id);
+      if (existing?.vote === vote) db.votes = db.votes.filter((item) => item !== existing);
+      else if (existing) existing.vote = vote;
+      else db.votes.push({ id: nid("vote"), tripId, placeId, userId: user.id, vote });
+      save();
+    },
+    async setPlacePriority(tripId, placeId, priority) {
+      assertEdit(tripId);
+      const saved = db.saved.find((item) => item.tripId === tripId && item.placeId === placeId);
+      if (!saved) throw new RepoError("Save the place first.");
+      saved.priority = priority;
+      save();
+    },
+    async addParticipant(tripId, name) {
+      assertEdit(tripId);
+      const participant: Participant = { id: nid("part"), tripId, name: name.trim() || "Traveler", userId: null };
+      db.participants.push(participant);
+      save();
+      return participant;
+    },
+    async removeParticipant(tripId, participantId) {
+      assertEdit(tripId);
+      db.participants = db.participants.filter((item) => item.id !== participantId);
+      save();
+    },
+    async setFxRate(tripId, currency, rate) {
+      assertEdit(tripId);
+      const trip = db.trips.find((item) => item.id === tripId);
+      if (!trip) throw new RepoError("Trip not found.");
+      trip.fxRates = { ...trip.fxRates, [currency]: rate };
       save();
     },
     async search(query) {

@@ -1,3 +1,5 @@
+import type { StyleSpecification } from "maplibre-gl";
+
 const LIGHT = "https://tiles.openfreemap.org/styles/liberty";
 const FIORD = "https://tiles.openfreemap.org/styles/fiord";
 
@@ -38,12 +40,9 @@ const LAYER_PAINT: Record<string, Record<string, string | number>> = {
   "boundary_country_z5-": { "line-color": "#fff6ec", "line-opacity": 0.9 },
 };
 
-type StyleLayer = { id: string; type?: string; paint?: Record<string, unknown> };
-type StyleDoc = { layers: StyleLayer[] };
+let darkStyle: Promise<StyleSpecification> | null = null;
 
-let darkStyle: Promise<StyleDoc> | null = null;
-
-function tuneDarkStyle(style: StyleDoc) {
+function tuneDarkStyle(style: StyleSpecification) {
   for (const layer of style.layers) {
     const paint = LAYER_PAINT[layer.id];
     if (paint) {
@@ -59,12 +58,12 @@ function tuneDarkStyle(style: StyleDoc) {
   return style;
 }
 
-export function resolveMapStyle(theme: "light" | "dark"): Promise<string | StyleDoc> {
+export function resolveMapStyle(theme: "light" | "dark"): Promise<string | StyleSpecification> {
   if (theme === "light") return Promise.resolve(LIGHT);
   darkStyle ??= fetch(FIORD)
     .then((response) => {
       if (!response.ok) throw new Error("Map style failed");
-      return response.json() as Promise<StyleDoc>;
+      return response.json() as Promise<StyleSpecification>;
     })
     .then(tuneDarkStyle);
   return darkStyle;

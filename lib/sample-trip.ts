@@ -34,6 +34,8 @@ export function buildTokyoSample(owner: User, options?: { stable?: boolean; with
     travelerCount: 2,
     centerLat: destination.lat,
     centerLng: destination.lng,
+    revision: 0,
+    fxRates: { JPY: 0.0067, EUR: 1.08 },
   };
 
   const dates = ["2027-03-12", "2027-03-13", "2027-03-14", "2027-03-15", "2027-03-16", "2027-03-17"];
@@ -94,6 +96,7 @@ export function buildTokyoSample(owner: User, options?: { stable?: boolean; with
     tripId,
     placeId,
     note: "",
+    priority: index === 0 ? "must" : "nice",
   }));
 
   const collaborators = options?.withCollaborators ?? stable;
@@ -114,6 +117,8 @@ export function buildTokyoSample(owner: User, options?: { stable?: boolean; with
       attachmentUrl: null,
       attachmentName: null,
       notes: "Window seat if the app lets you pick one.",
+      barcodeValue: "TK875",
+      barcodeType: "qr",
     },
     {
       id: id("book", "book_hotel"),
@@ -125,6 +130,8 @@ export function buildTokyoSample(owner: User, options?: { stable?: boolean; with
       attachmentUrl: null,
       attachmentName: null,
       notes: "5 nights. Late check-in confirmed.",
+      barcodeValue: "PH-2041",
+      barcodeType: "qr",
     },
     {
       id: id("book", "book_ticket"),
@@ -136,6 +143,8 @@ export function buildTokyoSample(owner: User, options?: { stable?: boolean; with
       attachmentUrl: null,
       attachmentName: null,
       notes: "Timed entry. Arrive 15 minutes early.",
+      barcodeValue: "TL-8831",
+      barcodeType: "qr",
     },
   ];
 
@@ -150,13 +159,14 @@ export function buildTokyoSample(owner: User, options?: { stable?: boolean; with
   ): { expense: Expense; shares: ExpenseShare[] } => {
     const expenseId = id("exp", stableId);
     return {
-      expense: { id: expenseId, tripId, title, amount, plannedAmount, category, paidBy, activityId: null },
+      expense: { id: expenseId, tripId, title, amount, plannedAmount, category, paidBy, activityId: null, currency: "USD", participantId: paidBy },
       shares: shares.map((share, index) => ({
         id: id("share", `${stableId}_${index}`),
         expenseId,
         tripId,
         userId: share.userId,
         amount: share.amount,
+        participantId: share.userId,
       })),
     };
   };
